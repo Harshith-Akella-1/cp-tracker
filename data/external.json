@@ -1,0 +1,351 @@
+{
+ "gfg": {
+  "aggressive-cows": {
+   "name": "Aggressive Cows",
+   "ts": 1792474842
+  },
+  "armstrong-numbers2727": {
+   "name": "Armstrong Numbers",
+   "ts": 1792474842
+  },
+  "binary-number-to-decimal-number3525": {
+   "name": "Binary to Decimal",
+   "ts": 1792474842
+  },
+  "bubble-sort": {
+   "name": "Bubble Sort",
+   "ts": 1792474842
+  },
+  "ceil-in-a-sorted-array": {
+   "name": "Ceil in Sorted Array",
+   "ts": 1792474842
+  },
+  "ceil-the-floor2802": {
+   "name": "Floor and Ceil in Unsorted",
+   "ts": 1792474842
+  },
+  "count-digits-in-given-number-n-which-divide-n3331": {
+   "name": "Digits in N that Divide it",
+   "ts": 1792474842
+  },
+  "count-nodes-of-linked-list": {
+   "name": "Length of Linked List",
+   "ts": 1792474842
+  },
+  "data-type-1666706751": {
+   "name": "Data Type",
+   "ts": 1792474842
+  },
+  "decision-making": {
+   "name": "Decision Making",
+   "ts": 1792474842
+  },
+  "delete-node-in-doubly-linked-list": {
+   "name": "Delete in a Doubly Linked List",
+   "ts": 1792474842
+  },
+  "find-length-of-loop": {
+   "name": "Cycle Length in Linked List",
+   "ts": 1792474842
+  },
+  "find-nth-root-of-m5843": {
+   "name": "Nth Root of M",
+   "ts": 1792474842
+  },
+  "first-and-last-occurrences-of-x3116": {
+   "name": "First and Last in Sorted",
+   "ts": 1792474842
+  },
+  "floor-in-a-sorted-array-1587115620": {
+   "name": "Floor in Sorted Array",
+   "ts": 1792474842
+  },
+  "frequency-of-array-elements-1587115620": {
+   "name": "Frequencies in a Limited Array",
+   "ts": 1792474842
+  },
+  "given-a-linked-list-of-0s-1s-and-2s-sort-it": {
+   "name": "Sort Llinked List of 0s, 1s and 2s",
+   "ts": 1792474842
+  },
+  "immediate-smaller-element1142": {
+   "name": "Next Smaller Element",
+   "ts": 1792474842
+  },
+  "implement-lower-bound": {
+   "name": "Implement Lower Bound",
+   "ts": 1792474842
+  },
+  "implement-queue-using-array": {
+   "name": "Queue Using Array",
+   "ts": 1792474842
+  },
+  "implement-upper-bound": {
+   "name": "Implement Upper Bound",
+   "ts": 1792474842
+  },
+  "insert-a-node-in-doubly-linked-list": {
+   "name": "Insertion in a Doubly Linked List",
+   "ts": 1792474842
+  },
+  "insertion-sort": {
+   "name": "Insertion Sort",
+   "ts": 1792474842
+  },
+  "introduction-to-linked-list": {
+   "name": "Array to Linked List",
+   "ts": 1792474842
+  },
+  "inverted-right-angletriangle-1605691171--104349": {
+   "name": "Inverted Right Angle Triangle Pattern",
+   "ts": 1792474842
+  },
+  "inverted-triangle-of-stars0110": {
+   "name": "Inverted Triangle of Stars",
+   "ts": 1792474842
+  },
+  "k-th-element-of-two-sorted-array1317": {
+   "name": "K-th of Two Sorted Arrays",
+   "ts": 1792474842
+  },
+  "koko-eating-bananas": {
+   "name": "Koko Eating Bananas",
+   "ts": 1792474842
+  },
+  "largest-element-in-array4009": {
+   "name": "Largest in Array",
+   "ts": 1792474842
+  },
+  "lcm-and-gcd4516": {
+   "name": "LCM And GCD",
+   "ts": 1792474842
+  },
+  "leaders-in-an-array-1587115620": {
+   "name": "Array Leaders",
+   "ts": 1792474842
+  },
+  "linked-list-insertion-1587115620": {
+   "name": "Linked List End Insertion",
+   "ts": 1792474842
+  },
+  "merge-sort": {
+   "name": "Merge Sort",
+   "ts": 1792474842
+  },
+  "number-of-occurrence2259": {
+   "name": "Count Occurrences in Sorted",
+   "ts": 1792474842
+  },
+  "outermost-parentheses": {
+   "name": "Outermost Parentheses of Primitives",
+   "ts": 1792474842
+  },
+  "parenthesis-checker2744": {
+   "name": "Parenthesis Checker",
+   "ts": 1792474842
+  },
+  "pass-by-reference-and-value": {
+   "name": "Pass by Reference and Value",
+   "ts": 1792474842
+  },
+  "postfix-to-infix-conversion": {
+   "name": "Postfix to Infix Conversion",
+   "ts": 1792474842
+  },
+  "postfix-to-prefix-conversion": {
+   "name": "Postfix to Prefix Conversion",
+   "ts": 1792474842
+  },
+  "prefix-to-infix-conversion": {
+   "name": "Prefix to Infix Conversion",
+   "ts": 1792474842
+  },
+  "prefix-to-postfix-conversion": {
+   "name": "Prefix to Postfix Conversion",
+   "ts": 1792474842
+  },
+  "prime-number2314": {
+   "name": "Prime Number",
+   "ts": 1792474842
+  },
+  "print-1-to-n-without-using-loops3621": {
+   "name": "1 to n Without Loop",
+   "ts": 1792474842
+  },
+  "print-gfg-n-times": {
+   "name": "Print GFG n times",
+   "ts": 1792474842
+  },
+  "print-n-to-1-without-loop": {
+   "name": "Print n to 1 Without Loop",
+   "ts": 1792474842
+  },
+  "print-square-wall-1605682270": {
+   "name": "Print Solid Square",
+   "ts": 1792474842
+  },
+  "pyramid-patterns": {
+   "name": "Pyramid Pattern",
+   "ts": 1792474842
+  },
+  "quick-sort": {
+   "name": "Quick Sort",
+   "ts": 1792474842
+  },
+  "reverse-a-doubly-linked-list": {
+   "name": "Reverse a Doubly Linked List",
+   "ts": 1792474842
+  },
+  "reverse-a-linked-list": {
+   "name": "Reverse Linked List",
+   "ts": 1792474842
+  },
+  "reverse-an-array": {
+   "name": "Reverse Array",
+   "ts": 1792474842
+  },
+  "right-angle-triangle-1605685807": {
+   "name": "Solid Right Angle Triangle Pattern",
+   "ts": 1792474842
+  },
+  "right-angled-number-triangle": {
+   "name": "Right-Angled Number Triangle Pattern",
+   "ts": 1792474842
+  },
+  "rotation4723": {
+   "name": "Find Rotation Count",
+   "ts": 1792474842
+  },
+  "row-with-max-1s0023": {
+   "name": "Row with Max 1s in Rowwise Sorted",
+   "ts": 1792474842
+  },
+  "search-in-linked-list-1664434326": {
+   "name": "Search in Linked List",
+   "ts": 1792474842
+  },
+  "search-insert-position-of-k-in-a-sorted-array": {
+   "name": "Sorted Insert Position",
+   "ts": 1792474842
+  },
+  "second-largest3735": {
+   "name": "Second Largest",
+   "ts": 1792474842
+  },
+  "selection-sort": {
+   "name": "Selection Sort",
+   "ts": 1792474842
+  },
+  "square-root": {
+   "name": "Square Root",
+   "ts": 1792474842
+  },
+  "sum-of-all-divisors-from-1-to-n4738": {
+   "name": "Sum 1 to n Divisors",
+   "ts": 1792474842
+  },
+  "sum-of-first-n-terms5843": {
+   "name": "Sum of Natural Number Cubes",
+   "ts": 1792474842
+  },
+  "switch-statement": {
+   "name": "Switch Statement",
+   "ts": 1792474842
+  },
+  "union-of-two-sorted-arrays-1587115621": {
+   "name": "Union of 2 Sorted Arrays",
+   "ts": 1792474842
+  },
+  "who-will-win-1587115621": {
+   "name": "Binary Search",
+   "ts": 1792474842
+  }
+ },
+ "lastRun": {
+  "at": 1792474842,
+  "gfg": "ok, 65 solved, 65 new",
+  "leetcode": "ok, 20 recent, 20 new"
+ },
+ "leetcode": {
+  "best-time-to-buy-and-sell-stock": {
+   "title": "Best Time to Buy and Sell Stock",
+   "ts": 1784594876
+  },
+  "find-missing-elements": {
+   "title": "Find Missing Elements",
+   "ts": 1785868002
+  },
+  "find-peak-element": {
+   "title": "Find Peak Element",
+   "ts": 1784912656
+  },
+  "intersection-of-two-arrays": {
+   "title": "Intersection of Two Arrays",
+   "ts": 1784212150
+  },
+  "length-of-last-word": {
+   "title": "Length of Last Word",
+   "ts": 1785954409
+  },
+  "length-of-longest-subarray-with-at-most-k-frequency": {
+   "title": "Length of Longest Subarray With at Most K Frequency",
+   "ts": 1784561281
+  },
+  "longest-consecutive-sequence": {
+   "title": "Longest Consecutive Sequence",
+   "ts": 1785071602
+  },
+  "majority-element": {
+   "title": "Majority Element",
+   "ts": 1784591789
+  },
+  "max-consecutive-ones": {
+   "title": "Max Consecutive Ones",
+   "ts": 1784224453
+  },
+  "maximum-subarray": {
+   "title": "Maximum Subarray",
+   "ts": 1784593134
+  },
+  "merge-sorted-array": {
+   "title": "Merge Sorted Array",
+   "ts": 1784213127
+  },
+  "minimum-number-of-days-to-make-m-bouquets": {
+   "title": "Minimum Number of Days to Make m Bouquets",
+   "ts": 1784875191
+  },
+  "missing-number": {
+   "title": "Missing Number",
+   "ts": 1784222333
+  },
+  "next-permutation": {
+   "title": "Next Permutation",
+   "ts": 1785040710
+  },
+  "rearrange-array-elements-by-sign": {
+   "title": "Rearrange Array Elements by Sign",
+   "ts": 1784942663
+  },
+  "set-matrix-zeroes": {
+   "title": "Set Matrix Zeroes",
+   "ts": 1785173125
+  },
+  "single-number": {
+   "title": "Single Number",
+   "ts": 1784225822
+  },
+  "sort-colors": {
+   "title": "Sort Colors",
+   "ts": 1784591467
+  },
+  "subarray-sum-equals-k": {
+   "title": "Subarray Sum Equals K",
+   "ts": 1784481769
+  },
+  "two-sum": {
+   "title": "Two Sum",
+   "ts": 1784590804
+  }
+ }
+}
