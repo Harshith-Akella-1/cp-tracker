@@ -528,7 +528,7 @@ function itemRow(it, {actions = true} = {}) {
   let acts = '';
   if (actions) {
     if (special) acts = done ? `<button class="btn sm ghost" data-act="undone" data-id="${esc(it.id)}">Undo</button>` : `<button class="btn sm pri" data-act="markdone" data-id="${esc(it.id)}">Done</button>`;
-    else acts = `${live ? `<button class="btn sm on" data-act="pause">${timer.running ? 'Pause' : 'Resume'} <span class="num" id="rowclock">${mmss(elapsed())}</span></button>` : `<button class="btn sm ${done ? '' : 'pri'}" data-act="start" data-id="${esc(it.id)}">${ICON.play} ${done || st === 'gaveup' ? 'Retry' : 'Start'}</button>`}
+    else acts = `${live ? `<button class="btn sm on" data-act="${timer.running ? 'pause' : 'askresume'}">${timer.running ? 'Pause' : 'Resume'} <span class="num" id="rowclock">${mmss(elapsed())}</span></button>` : `<button class="btn sm ${done ? '' : 'pri'}" data-act="start" data-id="${esc(it.id)}">${ICON.play} ${done || st === 'gaveup' ? 'Retry' : 'Start'}</button>`}
       <button class="btn sm ghost" data-act="detail" data-id="${esc(it.id)}" aria-label="Details">•••</button>`;
   }
   return `<li class="q${done ? ' done' : ''}${special ? ' special' : ''}${live ? ' live' : ''}">${rate}<div class="nm">${title}<div class="sub">${sub.join('')}</div></div><div class="acts">${acts}</div></li>`;
@@ -553,8 +553,8 @@ function timerPanel() {
       <div><div class="kicker">${timer.running ? 'Solving' : 'Paused'} · ${esc(it.p)} · est ${it.m} min</div>
         <h2 style="margin-top:2px">${it.u ? `<a href="${esc(it.u)}" target="_blank" rel="noopener" style="color:var(--fg);text-decoration:none">${esc(it.n)} ${ICON.ext}</a>` : esc(it.n)} <span class="num" style="color:${rcol(it.r)};font-size:16px">${it.r || ''}</span></h2></div>
       <div class="banner" id="tbanner" hidden></div>
-      <div class="row">
-        <button class="btn" data-act="pause">${timer.running ? 'Pause' : 'Resume'}</button>
+      ${timer.running ? `<div class="row">
+        <button class="btn" data-act="pause">Pause</button>
         <button class="btn ${timer.hints.includes(1) ? 'on' : ''}" data-act="hint" data-h="1">Hint 1</button>
         <button class="btn ${timer.hints.includes(2) ? 'on' : ''}" data-act="hint" data-h="2">Hint 2</button>
         <button class="btn ${timer.editorial ? 'on' : ''}" data-act="editorial">Editorial</button>
@@ -565,9 +565,14 @@ function timerPanel() {
         <button class="btn" data-act="copyai" data-id="${esc(it.id)}">Copy for AI</button>
         <button class="btn" data-act="paste" data-id="${esc(it.id)}">Paste analysis</button>
         <span style="flex:1"></span>
-        <button class="btn ghost danger" data-act="discard">Discard</button>
+        <button class="btn" data-act="entertime" title="Log the attempt with a time you type in, instead of the timer's">Solved in… (enter time)</button>
         <button class="btn pri" data-act="finish">Finish</button>
-      </div>
+      </div>` : `<div class="banner">Paused at ${mmss(s)}. Resume the timer or discard this attempt.</div>
+      <textarea id="tnotes" placeholder="Thought process: what you're trying, where you're stuck…">${esc(timer.notes || '')}</textarea>
+      <div class="row">
+        <button class="btn pri" data-act="askresume">Resume</button>
+        <button class="btn ghost danger" data-act="discard">Discard</button>
+      </div>`}
     </div>
   </section>`;
 }
@@ -737,15 +742,27 @@ function celebrate() {
 const dlg = $('#dlg'), dlgBody = $('#dlgBody');
 function openDlg(html) { dlgBody.innerHTML = html; if (!dlg.open) dlg.showModal(); }
 function closeDlg() { dlg.close(); }
-function finishDlg() {
-  const it = ITEMS.get(timer.id), s = elapsed();
-  const suggested = timer.editorial ? 'editorial' : timer.hints.length ? 'hint' : 'solved';
-  openDlg(`<header><h3>Finish: ${esc(it.n)}</h3><button class="btn sm" data-act="close">Close</button></header>
-    <div class="muted num">${mmss(s)} elapsed · estimate ${it.m} min · hints ${timer.hints.join('+') || 'none'}${timer.editorial ? ' · read editorial' : ''} · WA ${timer.wa}</div>
+// mode: 'timer' = finish with the timer's time (editable) · 'enter' = running timer, type the time · 'manual' = no timer at all
+function finishDlg(id = timer?.id, mode = 'timer') {
+  const it = ITEMS.get(id), t = mode === 'manual' ? null : timer, s = t ? elapsed() : 0;
+  const suggested = t ? (t.editorial ? 'editorial' : t.hints.length ? 'hint' : 'solved') : 'solved';
+  const minVal = mode === 'timer' ? Math.max(1, Math.round(s / 60)) : '';
+  openDlg(`<header><h3>${mode === 'manual' ? 'Log a solve' : 'Finish'}: ${esc(it.n)}</h3><button class="btn sm" data-act="close">Close</button></header>
+    <div class="muted num">${t ? `${mmss(s)} on the timer · ` : ''}estimate ${it.m} min${t ? ` · hints ${t.hints.join('+') || 'none'}${t.editorial ? ' · read editorial' : ''} · wrong answers ${t.wa}` : ''}</div>
+    <label class="f">Time taken (minutes)<input type="number" id="f_min" min="1" step="1" inputmode="numeric" value="${minVal}" placeholder="e.g. 18"></label>
+    ${t ? '' : `<div class="row" style="gap:14px;font-size:14px">
+      <label><input type="checkbox" id="f_h1"> Used hint 1</label><label><input type="checkbox" id="f_h2"> Used hint 2</label>
+      <label><input type="checkbox" id="f_ed"> Read editorial</label>
+      <label style="display:flex;align-items:center;gap:6px">Wrong answers <input type="number" id="f_wa" min="0" value="0" style="width:70px"></label></div>`}
     <label class="f">Outcome<select id="f_out">${Object.entries(OUTCOMES).map(([k, o]) => `<option value="${k}" ${k === suggested ? 'selected' : ''}>${o.label}</option>`).join('')}</select></label>
     <label class="f">Main mistake<select id="f_mis">${MISTAKES.map(m => `<option>${m}</option>`).join('')}</select></label>
-    <label class="f">Thought process and what you learned (an AI will read this later)<textarea id="f_notes" style="min-height:120px">${esc(timer.notes || '')}</textarea></label>
-    <div class="row" style="justify-content:flex-end"><button class="btn pri" data-act="savefinish">Save attempt</button></div>`);
+    <label class="f">Thought process and what you learned (an AI will read this later)<textarea id="f_notes" style="min-height:120px">${esc(t?.notes || '')}</textarea></label>
+    <div class="row" style="justify-content:flex-end"><button class="btn pri" data-act="savefinish" data-id="${esc(id)}" data-mode="${mode}">Save attempt</button></div>`);
+  if (mode !== 'timer') setTimeout(() => $('#f_min')?.focus(), 50);
+}
+function confirmDlg(title, body, act, label, danger = false) {
+  openDlg(`<header><h3>${esc(title)}</h3></header><p style="margin:0">${esc(body)}</p>
+    <div class="row" style="justify-content:flex-end"><button class="btn" data-act="close">Cancel</button><button class="btn ${danger ? 'danger' : 'pri'}" data-act="${act}">${esc(label)}</button></div>`);
 }
 function detailDlg(id) {
   const it = ITEMS.get(id), s = state.items[id];
@@ -753,7 +770,7 @@ function detailDlg(id) {
   const an = (s?.analyses || []).slice().reverse().map(x => `<li style="padding:6px 0;border-top:1px solid var(--line)"><b>${esc(x.source)}</b> <span class="muted">· ${new Date(x.at).toLocaleString('en-GB')}</span><pre class="md" style="margin-top:4px">${esc(x.text)}</pre></li>`).join('');
   openDlg(`<header><h3>${it.u ? `<a href="${esc(it.u)}" target="_blank" rel="noopener">${esc(it.n)}</a>` : esc(it.n)}</h3><button class="btn sm" data-act="close">Close</button></header>
     <div class="muted" style="font-size:13.5px">${esc(it.p)} · est. rating ${it.r || '—'} · est. ${it.m} min · ${esc(it.l?.join(' · ') || '')}${it.t?.length ? ' · ' + esc(it.t.join(', ')) : ''}${it.sb ? ' · ' + esc(it.sb) : ''}</div>
-    <div class="row"><button class="btn pri" data-act="start" data-id="${esc(id)}">Start timer</button><button class="btn" data-act="copyai" data-id="${esc(id)}">Copy for AI</button><button class="btn" data-act="paste" data-id="${esc(id)}">Paste analysis</button>
+    <div class="row"><button class="btn pri" data-act="start" data-id="${esc(id)}">Start timer</button><button class="btn" data-act="logtime" data-id="${esc(id)}">Solved in… (enter time)</button><button class="btn" data-act="copyai" data-id="${esc(id)}">Copy for AI</button><button class="btn" data-act="paste" data-id="${esc(id)}">Paste analysis</button>
       <button class="btn" data-act="${s?.skipped ? 'unskip' : 'skip'}" data-id="${esc(id)}">${s?.skipped ? 'Unskip' : 'Skip'}</button>
       ${state.synced[id] && !state.synced[id].off ? (state.synced[id].src === 'manual' ? `<button class="btn" data-act="unmanual" data-id="${esc(id)}">Unmark solved</button>` : `<span class="muted" style="font-size:13px;align-self:center">Solved on ${esc(state.synced[id].src)}</span>`) : `<button class="btn" data-act="manualsolve" data-id="${esc(id)}" title="For problems solved without the timer; counts toward today but not the practice rating">Mark solved (no timer)</button>`}</div>
     <div><h3 style="font-size:15px">Attempts</h3><ul style="list-style:none;margin:0;padding:0">${hist || '<li class="muted">None yet.</li>'}</ul></div>
@@ -779,15 +796,25 @@ document.addEventListener('click', async e => {
     case 'hint': { const h = +b.dataset.h; timer.hints = timer.hints.includes(h) ? timer.hints.filter(x => x !== h) : [...timer.hints, h].sort(); saveTimer(); render(); break; }
     case 'editorial': timer.editorial = !timer.editorial; saveTimer(); render(); break;
     case 'wa': timer.wa++; saveTimer(); render(); break;
-    case 'discard': if (b.dataset.confirm) { discardTimer(); } else { b.dataset.confirm = '1'; b.textContent = 'Tap again to discard'; setTimeout(() => { if (b.isConnected) { delete b.dataset.confirm; b.textContent = 'Discard'; } }, 3000); } break;
-    case 'finish': timer.notes = $('#tnotes')?.value || timer.notes; saveTimer(); finishDlg(); break;
+    case 'discard': if (timer) { timer.notes = $('#tnotes')?.value ?? timer.notes; saveTimer(); } confirmDlg('Discard this attempt?', `The ${mmss(elapsed())} on the timer and this attempt's notes will be deleted. This can't be undone.`, 'dodiscard', 'Discard', true); break;
+    case 'dodiscard': closeDlg(); discardTimer(); toast('Attempt discarded'); break;
+    case 'askresume': confirmDlg('Resume the timer?', `The clock continues from ${mmss(elapsed())}.`, 'doresume', 'Resume'); break;
+    case 'doresume': closeDlg(); if (timer && !timer.running) { pauseTimer(); runTick(); } break;
+    case 'finish': timer.notes = $('#tnotes')?.value || timer.notes; saveTimer(); finishDlg(timer.id, 'timer'); break;
+    case 'entertime': timer.notes = $('#tnotes')?.value || timer.notes; saveTimer(); finishDlg(timer.id, 'enter'); break;
+    case 'logtime': if (timer && timer.id === id) { finishDlg(id, 'enter'); break; } finishDlg(id, 'manual'); break;
     case 'savefinish': {
-      const it = ITEMS.get(timer.id), s = itemState(timer.id);
-      const outcome = $('#f_out').value;
-      s.attempts.push({id: uid(), start: timer.began, end: Date.now(), sec: Math.round(elapsed()), hints: timer.hints, editorial: timer.editorial || outcome === 'editorial', wa: timer.wa,
-                       outcome, mistake: $('#f_mis').value, notes: $('#f_notes').value.trim(), r: it.r});
-      s.updatedAt = Date.now(); s.skipped = false;
-      const before = D.R; timer = null; saveTimer(); clearInterval(tick); closeDlg(); touch(); armed = true; render();
+      const mode = b.dataset.mode || 'timer', fid = b.dataset.id || timer?.id;
+      const it = ITEMS.get(fid), s = itemState(fid);
+      const min = +$('#f_min').value; if (!(min > 0)) { toast('Enter the time taken in minutes'); $('#f_min').focus(); break; }
+      const t = mode === 'manual' ? null : timer;
+      const hints = t ? t.hints : [$('#f_h1')?.checked && 1, $('#f_h2')?.checked && 2].filter(Boolean);
+      const ed = t ? t.editorial : !!$('#f_ed')?.checked, wa = t ? t.wa : (+$('#f_wa')?.value || 0);
+      const outcome = $('#f_out').value, now = Date.now(), sec = Math.round(min * 60);
+      s.attempts.push({id: uid(), start: t ? t.began : now - sec * 1000, end: now, sec, hints, editorial: ed || outcome === 'editorial', wa,
+                       outcome, mistake: $('#f_mis').value, notes: $('#f_notes').value.trim(), r: it.r, ...(mode !== 'timer' ? {timeEntered: true} : {})});
+      s.updatedAt = now; s.skipped = false;
+      const before = D.R; if (t) { timer = null; saveTimer(); clearInterval(tick); } closeDlg(); touch(); armed = true; render();
       const dR = D.R - before; toast(`Saved · rating ${dR >= 0 ? '+' : ''}${dR.toFixed(1)} → ${Math.round(D.R)}`);
       break;
     }
