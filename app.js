@@ -1,4 +1,4 @@
-/* Road to 1600 — CP tracker. Plain JS, no build step.
+/* Road to 2000 — CP tracker. Plain JS, no build step.
    Data: sheet.json (static plan) + state (your logs) synced to a PRIVATE GitHub repo (data/state.json, data/STATUS.md).
    Everything numeric (practice rating, XP, gold, HP, streak) is DERIVED from the attempt log, so merging two devices
    is just a union of attempts. */
@@ -104,6 +104,7 @@ function derive() {
   }
   // synced solves (solved on CF/AtCoder without a logged attempt) count toward the day but not the rating
   for (const [id, s] of Object.entries(state.synced)) {
+    if (s.off) continue;
     if (perItem[id]) continue;
     const pd = perDay[s.day] ||= {solved: 0, min: 0, att: 0}; pd.solved++;
     const it = ITEMS.get(id); if (it) { xp += Math.round(Math.max(8, it.r / 20) * 0.7); gold += Math.max(8, it.r / 20) * 0.14; }
@@ -136,7 +137,7 @@ function derive() {
     const it = ITEMS.get(id), s = state.items[id];
     if (s?.skipped) status[id] = 'skipped';
     else if (perItem[id]) status[id] = perItem[id].outcome;
-    else if (state.synced[id]) status[id] = 'synced';
+    else if (state.synced[id] && !state.synced[id].off) status[id] = 'synced';
     else if (s?.done) status[id] = 'done';
     else status[id] = null;
   }
@@ -255,8 +256,9 @@ async function autosync(manual = false) {
       if (j.status === 'OK') for (const s of j.result) {
         const day = isoLocal(new Date(s.creationTimeSeconds * 1000));
         if (s.verdict === 'OK') {
-          const id = `CF:${s.problem.contestId}${s.problem.index}`;
-          if (ITEMS.has(id) && !state.synced[id]) { state.synced[id] = {day, src: 'Codeforces'}; added++; }
+          const key = `${s.problem.contestId}${s.problem.index}`;
+          const id = ITEMS.has(`CF:${key}`) ? `CF:${key}` : gymIndex().get(key);   // gym mirrors (e.g. CSES on Codeforces)
+          if (id && ITEMS.has(id) && !state.synced[id]) { state.synced[id] = {day, src: 'Codeforces'}; added++; }
         }
         if (s.author?.participantType === 'VIRTUAL' || s.author?.participantType === 'CONTESTANT') {
           const mid = `MOCK:${s.problem.contestId}`;
@@ -273,10 +275,47 @@ async function autosync(manual = false) {
         if (ITEMS.has(id) && !state.synced[id]) { state.synced[id] = {day: isoLocal(new Date(s.epoch_second * 1000)), src: 'AtCoder'}; added++; }
       }
     }
+    try { added += await syncExternal(); } catch (e) { if (manual) toast('LeetCode/GFG sync failed: ' + e.message); }
     LS.set('cpt.lastAuto', Date.now());
     if (added) { touch(); render(); }
     if (manual) toast(added ? `Found ${added} new solve${added > 1 ? 's' : ''}` : 'No new solves found');
   } catch (e) { if (manual) toast('Codeforces/AtCoder sync failed: ' + e.message); }
+}
+let GYM_INDEX = null;
+function gymIndex() {
+  if (GYM_INDEX) return GYM_INDEX;
+  GYM_INDEX = new Map();
+  for (const it of ITEMS.values()) { const m = (it.u || '').match(/codeforces\.com\/gym\/(\d+)\/problem\/(\w+)/); if (m) GYM_INDEX.set(m[1] + m[2], it.id); }
+  return GYM_INDEX;
+}
+// LeetCode + GFG: browsers can't call those sites directly, so a GitHub Action in your private data repo fetches them
+// every few hours into data/external.json; the app reads that file with your token.
+const normName = s => String(s || '').toLowerCase().replace(/&/g, 'and').replace(/\(.*?\)/g, '').replace(/[^a-z0-9]/g, '');
+const parenName = s => { const m = String(s || '').match(/\((.*?)\)/); return m ? normName(m[1]) : ''; };
+let GFG_INDEX = null;
+function gfgIndex() {
+  if (GFG_INDEX) return GFG_INDEX;
+  GFG_INDEX = new Map();
+  for (const it of ITEMS.values()) if (it.p === 'GFG' && it.k !== 'retest') [normName(it.n), parenName(it.n)].filter(Boolean).forEach(k => GFG_INDEX.set(k, it.id));
+  return GFG_INDEX;
+}
+async function syncExternal() {
+  if (!cfg.token || !cfg.owner) return 0;
+  const f = await GH.get('data/external.json'); if (!f) return 0;
+  const ext = JSON.parse(f.text); let added = 0;
+  const dayOf = ts => isoLocal(new Date((ts || Date.now() / 1000) * 1000));
+  for (const [slug, v] of Object.entries(ext.leetcode || {})) {
+    const id = 'LC:' + slug;
+    if (ITEMS.has(id) && !state.synced[id]) { state.synced[id] = {day: dayOf(v.ts), src: 'LeetCode'}; added++; }
+  }
+  const gi = gfgIndex();
+  for (const [slug, v] of Object.entries(ext.gfg || {})) {
+    const keys = [normName(v.name), normName(slug.replace(/\d+$/, '').replace(/-/g, ' '))];
+    const id = keys.map(k => gi.get(k)).find(Boolean);
+    if (id && !state.synced[id]) { state.synced[id] = {day: dayOf(v.ts), src: 'GFG'}; added++; }
+  }
+  LS.set('cpt.extRun', ext.lastRun || null);
+  return added;
 }
 
 // ---------------------------------------------------------------- timer
@@ -300,10 +339,11 @@ function runTick() {
   tick = setInterval(() => {
     const s = elapsed();
     const c = $('#clock'); if (c) c.textContent = mmss(s);
+    const rc = $('#rowclock'); if (rc) rc.textContent = mmss(s);
     if (timer.running) renderTimerMs();
     for (const [t, msg] of MILESTONES) if (s >= t && !timer.alerted.includes(t)) {
       timer.alerted.push(t); saveTimer(); beep(); const b = $('#tbanner'); if (b) { b.textContent = msg; b.hidden = false; }
-      document.title = '⏰ ' + msg.split(' —')[0]; setTimeout(() => document.title = 'Road to 1600', 8000);
+      document.title = '⏰ ' + msg.split(' —')[0]; setTimeout(() => document.title = 'Road to 2000', 8000);
     }
   }, 1000);
 }
@@ -392,7 +432,7 @@ function parseBlock(text, kind) {
 // ---------------------------------------------------------------- STATUS.md
 function statusMd() {
   const d = D; const lines = [];
-  lines.push(`# CP status — Harshith (C++)`, `_Updated ${new Date().toLocaleString('en-GB')}. Generated by the Road to 1600 tracker from my attempt log. Any AI coaching me should read this first._`, '');
+  lines.push(`# CP status — Harshith (C++)`, `_Updated ${new Date().toLocaleString('en-GB')}. Generated by the Road to 2000 tracker from my attempt log. Any AI coaching me should read this first._`, '');
   lines.push('## Snapshot',
     `- Practice rating: **${Math.round(d.R)}** (${d.n} rated attempts; Elo-style vs estimated CF problem ratings). Goal: Codeforces Expert 1600.`,
     `- Projection: ${d.proj?.done ? 'already at 1600 practice level' : d.proj?.date ? `reaches 1600 around ${fmtShort(d.proj.date)} at the current trend (+${d.proj.slope.toFixed(1)}/day)` : 'not enough recent data / trend flat'}`,
@@ -488,7 +528,7 @@ function itemRow(it, {actions = true} = {}) {
   let acts = '';
   if (actions) {
     if (special) acts = done ? `<button class="btn sm ghost" data-act="undone" data-id="${esc(it.id)}">Undo</button>` : `<button class="btn sm pri" data-act="markdone" data-id="${esc(it.id)}">Done</button>`;
-    else acts = `${live ? '<span class="pill" style="color:var(--rank)">live</span>' : `<button class="btn sm ${done ? '' : 'pri'}" data-act="start" data-id="${esc(it.id)}">${ICON.play} ${done || st === 'gaveup' ? 'Retry' : 'Start'}</button>`}
+    else acts = `${live ? `<button class="btn sm on" data-act="pause">${timer.running ? 'Pause' : 'Resume'} <span class="num" id="rowclock">${mmss(elapsed())}</span></button>` : `<button class="btn sm ${done ? '' : 'pri'}" data-act="start" data-id="${esc(it.id)}">${ICON.play} ${done || st === 'gaveup' ? 'Retry' : 'Start'}</button>`}
       <button class="btn sm ghost" data-act="detail" data-id="${esc(it.id)}" aria-label="Details">•••</button>`;
   }
   return `<li class="q${done ? ' done' : ''}${special ? ' special' : ''}${live ? ' live' : ''}">${rate}<div class="nm">${title}<div class="sub">${sub.join('')}</div></div><div class="acts">${acts}</div></li>`;
@@ -518,7 +558,7 @@ function timerPanel() {
         <button class="btn ${timer.hints.includes(1) ? 'on' : ''}" data-act="hint" data-h="1">Hint 1</button>
         <button class="btn ${timer.hints.includes(2) ? 'on' : ''}" data-act="hint" data-h="2">Hint 2</button>
         <button class="btn ${timer.editorial ? 'on' : ''}" data-act="editorial">Editorial</button>
-        <button class="btn" data-act="wa">WA <span class="num">${timer.wa}</span></button>
+        <button class="btn" data-act="wa" title="Count of submissions the judge rejected (Wrong Answer, TLE, runtime error)">Wrong answers <span class="num">${timer.wa}</span></button>
       </div>
       <textarea id="tnotes" placeholder="Thought process: what you're trying, where you're stuck…">${esc(timer.notes || '')}</textarea>
       <div class="row">
@@ -557,7 +597,7 @@ function renderToday() {
     </div>
     <div class="segs">${segs}</div>
     <div class="row" style="margin-top:12px">
-      <button class="btn sm" data-act="autosync">Check Codeforces / AtCoder</button>
+      <button class="btn sm" data-act="autosync">Check all platforms</button>
       ${graceDays().includes(d.today) ? '' : `<button class="btn sm ghost" data-act="grace">Grace day (${SHEET.meta.grace_days - graceDays().length} left)</button>`}
       ${(() => { const g = graceDays().filter(x => x >= addDays(d.today, -2)).pop(); return g ? `<button class="btn sm ghost" data-act="ungrace" data-date="${g}">Undo grace day (${fmtShort(g)})</button>` : ''; })()}
     </div>
@@ -655,7 +695,7 @@ function renderSettings() {
     <div class="row"><button class="btn" data-act="export">Export JSON</button><label class="btn">Import JSON<input type="file" id="importFile" accept="application/json" hidden></label><button class="btn ghost danger" data-act="resetlocal">Clear this device's copy</button></div></section>`;
 }
 function renderOnboarding() {
-  return `<section class="onb"><div class="rank" style="grid-template-columns:1fr"><div style="position:relative;z-index:1"><div class="title">Road to 1600</div>
+  return `<section class="onb"><div class="rank" style="grid-template-columns:1fr"><div style="position:relative;z-index:1"><div class="title">Road to 2000</div>
     <div class="big" style="font-size:44px">Connect your private repo</div>
     <p class="muted">The sheet and your logs are stored only in your private GitHub repo, so this page shows nothing until it's connected.</p></div></div>
     <div class="panel"><ol><li>Create a fine-grained token for <span class="mono">cp-tracker-data</span> only, with Contents set to read and write.</li><li>Fill in the form below and tap <b>Save &amp; sync</b>.</li><li>Do the same once on each device.</li></ol></div>
@@ -714,7 +754,8 @@ function detailDlg(id) {
   openDlg(`<header><h3>${it.u ? `<a href="${esc(it.u)}" target="_blank" rel="noopener">${esc(it.n)}</a>` : esc(it.n)}</h3><button class="btn sm" data-act="close">Close</button></header>
     <div class="muted" style="font-size:13.5px">${esc(it.p)} · est. rating ${it.r || '—'} · est. ${it.m} min · ${esc(it.l?.join(' · ') || '')}${it.t?.length ? ' · ' + esc(it.t.join(', ')) : ''}${it.sb ? ' · ' + esc(it.sb) : ''}</div>
     <div class="row"><button class="btn pri" data-act="start" data-id="${esc(id)}">Start timer</button><button class="btn" data-act="copyai" data-id="${esc(id)}">Copy for AI</button><button class="btn" data-act="paste" data-id="${esc(id)}">Paste analysis</button>
-      <button class="btn" data-act="${s?.skipped ? 'unskip' : 'skip'}" data-id="${esc(id)}">${s?.skipped ? 'Unskip' : 'Skip'}</button></div>
+      <button class="btn" data-act="${s?.skipped ? 'unskip' : 'skip'}" data-id="${esc(id)}">${s?.skipped ? 'Unskip' : 'Skip'}</button>
+      ${state.synced[id] && !state.synced[id].off ? (state.synced[id].src === 'manual' ? `<button class="btn" data-act="unmanual" data-id="${esc(id)}">Unmark solved</button>` : `<span class="muted" style="font-size:13px;align-self:center">Solved on ${esc(state.synced[id].src)}</span>`) : `<button class="btn" data-act="manualsolve" data-id="${esc(id)}" title="For problems solved without the timer; counts toward today but not the practice rating">Mark solved (no timer)</button>`}</div>
     <div><h3 style="font-size:15px">Attempts</h3><ul style="list-style:none;margin:0;padding:0">${hist || '<li class="muted">None yet.</li>'}</ul></div>
     <div><h3 style="font-size:15px">AI analyses</h3><ul style="list-style:none;margin:0;padding:0">${an || '<li class="muted">None yet. Use Copy for AI, and paste the ANALYSIS block back here.</li>'}</ul></div>`);
 }
@@ -771,6 +812,8 @@ document.addEventListener('click', async e => {
     case 'grace': if (graceDays().length >= SHEET.meta.grace_days) { toast('No grace days left'); break; } (state.graceLog ||= []).push({id: uid(), date: D.today, on: true, at: Date.now()}); touch(); render(); toast('Grace day taken — streak and HP are safe today'); break;
     case 'ungrace': (state.graceLog ||= []).push({id: uid(), date: b.dataset.date || D.today, on: false, at: Date.now()}); touch(); render(); toast('Grace day undone'); break;
     case 'autosync': autosync(true); break;
+    case 'manualsolve': state.synced[id] = {day: D.today, src: 'manual', at: Date.now()}; touch(); closeDlg(); render(); toast('Marked solved'); break;
+    case 'unmanual': state.synced[id] = {...state.synced[id], off: true, at: Date.now()}; touch(); closeDlg(); render(); toast('Unmarked'); break;
     case 'redeem': { const r = state.rewards.find(x => x.id === id); if (r && D.gold >= r.cost) { state.redeemed.push({id: uid(), rid: r.id, name: r.name, cost: r.cost, at: Date.now()}); touch(); render(); toast(`Enjoy: ${r.name}`); } break; }
     case 'delreward': state.rewards = state.rewards.filter(x => x.id !== id); touch(); render(); break;
     case 'addreward': { const n = $('#rwName').value.trim(), c = +$('#rwCost').value; if (!n || !(c > 0)) { toast('Give the reward a name and a cost'); break; } state.rewards.push({id: uid(), name: n, cost: Math.round(c)}); touch(); render(); break; }
