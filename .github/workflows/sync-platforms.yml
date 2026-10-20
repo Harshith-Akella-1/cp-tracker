@@ -22,7 +22,7 @@ jobs:
         env:
           LC_USER: QXyb4olXqq
           GFG_USER: harshithakella04
-        run: python3 scripts/sync_platforms.py
+        run: python3 .github/workflows/scripts/sync_platforms.py
       - name: Commit if changed
         run: |
           git config user.name "platform-sync"
