@@ -554,7 +554,6 @@ function timerPanel() {
         <h2 style="margin-top:2px">${it.u ? `<a href="${esc(it.u)}" target="_blank" rel="noopener" style="color:var(--fg);text-decoration:none">${esc(it.n)} ${ICON.ext}</a>` : esc(it.n)} <span class="num" style="color:${rcol(it.r)};font-size:16px">${it.r || ''}</span></h2></div>
       <div class="banner" id="tbanner" hidden></div>
       ${timer.running ? `<div class="row">
-        <button class="btn" data-act="pause">Pause</button>
         <button class="btn ${timer.hints.includes(1) ? 'on' : ''}" data-act="hint" data-h="1">Hint 1</button>
         <button class="btn ${timer.hints.includes(2) ? 'on' : ''}" data-act="hint" data-h="2">Hint 2</button>
         <button class="btn ${timer.editorial ? 'on' : ''}" data-act="editorial">Editorial</button>
@@ -566,6 +565,7 @@ function timerPanel() {
         <button class="btn" data-act="copyai" data-id="${esc(it.id)}">Copy for AI</button>
         <button class="btn" data-act="paste" data-id="${esc(it.id)}">Paste analysis</button>
         <span style="flex:1"></span>
+        <button class="btn" data-act="pause">Pause</button>
         <button class="btn" data-act="entertime" title="Log the attempt with a time you type in, instead of the timer's">Solved in… (enter time)</button>
         <button class="btn pri" data-act="finish">Finish</button>
       </div>` : `<div class="banner">Paused at ${mmss(s)}. Resume the timer or discard this attempt.</div>
@@ -697,8 +697,8 @@ function renderSettings() {
       <label class="f">Starting practice rating<input type="number" id="s_init" value="${esc(cfg.initRating)}"></label>
       <label class="f">Daily target (problems)<input type="number" id="s_target" value="${esc(cfg.dailyTarget)}" min="1"></label>
       <label class="f">Solutions repo (blank = your data repo)<input type="text" id="s_solrepo" value="${esc(cfg.solRepo || '')}" placeholder="${esc(cfg.repo)}"></label>
-      <label class="f">Solutions folder<input type="text" id="s_soldir" value="${esc(cfg.solDir || 'solutions')}"></label>
-    </div><p class="muted" style="font-size:12.5px;margin:8px 0 0">Uploaded code goes to <span class="mono">${esc(cfg.solDir || 'solutions')}/&lt;rating&gt;/</span> in that repo. If you use a different repo, give your token access to it too (Contents: read and write).</p>
+      <label class="f">Solutions folder<input type="text" id="s_soldir" value="${esc(cfg.solDir ?? 'solutions')}" placeholder="leave empty for rating folders at the repo root"></label>
+    </div><p class="muted" style="font-size:12.5px;margin:8px 0 0">Uploaded code goes to <span class="mono">${esc(cfg.solDir ?? 'solutions') ? esc(cfg.solDir ?? 'solutions') + '/' : ''}&lt;rating&gt;/</span> in that repo; leave the folder empty to put the rating folders at the top level. If you use a different repo, give your token access to it too (Contents: read and write).</p>
     <div class="row" style="margin-top:12px"><button class="btn" data-act="savecfg">Save</button></div></section>
   <section class="panel"><h3>Backup</h3><p class="muted" style="font-size:13.5px;margin:6px 0 12px">Export the full log as JSON for any AI or for safekeeping, or import one to merge it in.</p>
     <div class="row"><button class="btn" data-act="export">Export JSON</button><label class="btn">Import JSON<input type="file" id="importFile" accept="application/json" hidden></label><button class="btn ghost danger" data-act="resetlocal">Clear this device's copy</button></div></section>`;
@@ -751,7 +751,8 @@ function solutionPath(it, ext) {
   const gym = (it.u || '').match(/codeforces\.com\/gym\/(\d+)\/problem\/(\w+)/);
   const code = gym ? `${gym[1]}${gym[2]}` : it.id.split(':').slice(1).join('-');
   const name = `${it.p}_${code}${slugify(it.n) && !code.includes(slugify(it.n)) ? '_' + slugify(it.n) : ''}.${ext}`.replace(/[^A-Za-z0-9._-]/g, '-');
-  return `${cfg.solDir || 'solutions'}/${band}/${name}`;
+  const dir = cfg.solDir ?? 'solutions';
+  return `${dir ? dir + '/' : ''}${band}/${name}`;
 }
 function solutionBox(id) {
   const it = ITEMS.get(id), sols = state.items[id]?.solutions || [], repo = cfg.solRepo || cfg.repo;
@@ -915,7 +916,7 @@ document.addEventListener('click', async e => {
     case 'savecfg': {
       const v = k => $('#s_' + k)?.value?.trim();
       if ($('#s_owner')) Object.assign(cfg, {owner: v('owner'), repo: v('repo') || 'cp-tracker-data', branch: v('branch') || 'main', token: v('token')});
-      if ($('#s_cf')) Object.assign(cfg, {cf: v('cf'), ac: v('ac'), initRating: +v('init') || 1100, dailyTarget: +v('target') || 6, solRepo: v('solrepo') || '', solDir: (v('soldir') || 'solutions').replace(/^\/+|\/+$/g, '')});
+      if ($('#s_cf')) Object.assign(cfg, {cf: v('cf'), ac: v('ac'), initRating: +v('init') || 1100, dailyTarget: +v('target') || 6, solRepo: v('solrepo') || '', solDir: (v('soldir') ?? 'solutions').replace(/^\/+|\/+$/g, '')});
       LS.set('cpt.cfg', cfg); toast('Saved');
       if (cfg.token) { const sh = await loadSheet(); if (sh) { const first = !SHEET; initSheet(sh); if (first) tab = 'today'; } render(); if (SHEET) { syncNow(true); autosync(true); } } else render(); break;
     }
