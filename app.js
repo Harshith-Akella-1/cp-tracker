@@ -180,16 +180,16 @@ function derive() {
 // ---------------------------------------------------------------- GitHub sync (private repo)
 const GH = {
   headers() { return {'Authorization': `Bearer ${cfg.token}`, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'}; },
-  url(path) { return `https://api.github.com/repos/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(cfg.repo)}/contents/${path}`; },
-  async get(path) {
-    const r = await fetch(this.url(path) + `?ref=${encodeURIComponent(cfg.branch)}&t=${Date.now()}`, {headers: this.headers(), cache: 'no-store'});
+  url(path, repo = cfg.repo) { return `https://api.github.com/repos/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(repo)}/contents/${path.split('/').map(encodeURIComponent).join('/')}`; },
+  async get(path, repo) {
+    const r = await fetch(this.url(path, repo) + `?ref=${encodeURIComponent(cfg.branch)}&t=${Date.now()}`, {headers: this.headers(), cache: 'no-store'});
     if (r.status === 404) return null;
     if (!r.ok) throw new Error(`GitHub ${r.status}: ${(await r.json().catch(() => ({}))).message || r.statusText}`);
     const j = await r.json(); return {text: b64dec(j.content), sha: j.sha};
   },
-  async put(path, text, sha, message) {
+  async put(path, text, sha, message, repo) {
     const body = {message, content: b64enc(text), branch: cfg.branch}; if (sha) body.sha = sha;
-    const r = await fetch(this.url(path), {method: 'PUT', headers: {...this.headers(), 'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const r = await fetch(this.url(path, repo), {method: 'PUT', headers: {...this.headers(), 'Content-Type': 'application/json'}, body: JSON.stringify(body)});
     if (r.status === 409 || r.status === 422) { const e = new Error('conflict'); e.conflict = true; throw e; }
     if (!r.ok) throw new Error(`GitHub ${r.status}: ${(await r.json().catch(() => ({}))).message || r.statusText}`);
     return (await r.json()).content.sha;
@@ -203,7 +203,7 @@ function mergeStates(a, b) {
     const x = a.items?.[id] || {}, y = b.items?.[id] || {};
     const byId = (arr1 = [], arr2 = []) => { const m = new Map(); [...arr1, ...arr2].forEach(o => m.set(o.id, o)); return [...m.values()].sort((p, q) => (p.end || p.at) - (q.end || q.at)); };
     const newer = (x.updatedAt || 0) >= (y.updatedAt || 0) ? x : y;
-    out.items[id] = {attempts: byId(x.attempts, y.attempts), analyses: byId(x.analyses, y.analyses),
+    out.items[id] = {attempts: byId(x.attempts, y.attempts), analyses: byId(x.analyses, y.analyses), solutions: byId(x.solutions, y.solutions),
                      skipped: newer.skipped || false, done: x.done || y.done || false, doneAt: x.doneAt || y.doneAt, updatedAt: newer.updatedAt || 0};
   }
   out.synced = {...(b.synced || {}), ...(a.synced || {})};
@@ -561,6 +561,7 @@ function timerPanel() {
         <button class="btn" data-act="wa" title="Count of submissions the judge rejected (Wrong Answer, TLE, runtime error)">Wrong answers <span class="num">${timer.wa}</span></button>
       </div>
       <textarea id="tnotes" placeholder="Thought process: what you're trying, where you're stuck…">${esc(timer.notes || '')}</textarea>
+      ${solutionBox(it.id)}
       <div class="row">
         <button class="btn" data-act="copyai" data-id="${esc(it.id)}">Copy for AI</button>
         <button class="btn" data-act="paste" data-id="${esc(it.id)}">Paste analysis</button>
@@ -695,7 +696,10 @@ function renderSettings() {
       <label class="f">AtCoder handle<input type="text" id="s_ac" value="${esc(cfg.ac)}"></label>
       <label class="f">Starting practice rating<input type="number" id="s_init" value="${esc(cfg.initRating)}"></label>
       <label class="f">Daily target (problems)<input type="number" id="s_target" value="${esc(cfg.dailyTarget)}" min="1"></label>
-    </div><div class="row" style="margin-top:12px"><button class="btn" data-act="savecfg">Save</button></div></section>
+      <label class="f">Solutions repo (blank = your data repo)<input type="text" id="s_solrepo" value="${esc(cfg.solRepo || '')}" placeholder="${esc(cfg.repo)}"></label>
+      <label class="f">Solutions folder<input type="text" id="s_soldir" value="${esc(cfg.solDir || 'solutions')}"></label>
+    </div><p class="muted" style="font-size:12.5px;margin:8px 0 0">Uploaded code goes to <span class="mono">${esc(cfg.solDir || 'solutions')}/&lt;rating&gt;/</span> in that repo. If you use a different repo, give your token access to it too (Contents: read and write).</p>
+    <div class="row" style="margin-top:12px"><button class="btn" data-act="savecfg">Save</button></div></section>
   <section class="panel"><h3>Backup</h3><p class="muted" style="font-size:13.5px;margin:6px 0 12px">Export the full log as JSON for any AI or for safekeeping, or import one to merge it in.</p>
     <div class="row"><button class="btn" data-act="export">Export JSON</button><label class="btn">Import JSON<input type="file" id="importFile" accept="application/json" hidden></label><button class="btn ghost danger" data-act="resetlocal">Clear this device's copy</button></div></section>`;
 }
@@ -738,6 +742,68 @@ function celebrate() {
   let f = 0; (function step() { ctx.clearRect(0, 0, cv.width, cv.height); P.forEach(p => { p.vy += .35; p.x += p.vx; p.y += p.vy; p.r += .2; ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.r); ctx.fillStyle = p.c; ctx.fillRect(-p.s / 2, -p.s / 2, p.s, p.s * .6); ctx.restore(); }); if (++f < 90) requestAnimationFrame(step); else ctx.clearRect(0, 0, cv.width, cv.height); })();
 }
 
+// ---------------------------------------------------------------- solutions → GitHub (rating-wise folders)
+let pendingSol = null;   // {id, name, text} picked/pasted but not uploaded yet (survives re-renders)
+const LANG = {cpp: '//', cc: '//', cxx: '//', c: '//', h: '//', java: '//', js: '//', ts: '//', kt: '//', rs: '//', go: '//', cs: '//', swift: '//', py: '#', rb: '#'};
+const slugify = s => String(s).toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+function solutionPath(it, ext) {
+  const band = it.r ? String(Math.floor(it.r / 100) * 100) : 'unrated';
+  const gym = (it.u || '').match(/codeforces\.com\/gym\/(\d+)\/problem\/(\w+)/);
+  const code = gym ? `${gym[1]}${gym[2]}` : it.id.split(':').slice(1).join('-');
+  const name = `${it.p}_${code}${slugify(it.n) && !code.includes(slugify(it.n)) ? '_' + slugify(it.n) : ''}.${ext}`.replace(/[^A-Za-z0-9._-]/g, '-');
+  return `${cfg.solDir || 'solutions'}/${band}/${name}`;
+}
+function solutionBox(id) {
+  const it = ITEMS.get(id), sols = state.items[id]?.solutions || [], repo = cfg.solRepo || cfg.repo;
+  const p = pendingSol?.id === id ? pendingSol : null;
+  const links = sols.slice().reverse().map(x => `<li><a href="https://github.com/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(x.repo || repo)}/blob/${encodeURIComponent(cfg.branch)}/${x.path.split('/').map(encodeURIComponent).join('/')}" target="_blank" rel="noopener">${esc(x.path)}</a> <span class="muted">· ${new Date(x.at).toLocaleString('en-GB')}</span></li>`).join('');
+  return `<div class="solbox" style="border:1px dashed var(--line-2,var(--line));border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:8px">
+    <div class="row" style="justify-content:space-between"><b style="font-size:14px">Accepted code</b><span class="muted" style="font-size:12px">goes to <span class="mono">${esc(solutionPath(it, 'cpp').replace(/[^/]+$/, ''))}</span></span></div>
+    <div class="row">
+      <label class="btn sm">Choose file<input type="file" class="solFile" data-id="${esc(id)}" accept=".cpp,.cc,.cxx,.c,.h,.py,.java,.js,.ts,.kt,.rs,.go,.cs,.rb,.swift,.txt" hidden></label>
+      <span class="muted solName" style="font-size:13px;min-width:0;overflow-wrap:anywhere">${p?.name ? esc(p.name) : 'or paste it below'}</span>
+    </div>
+    <textarea class="solCode" data-id="${esc(id)}" placeholder="Paste your accepted code here (C++ assumed for pasted code)" style="min-height:70px;font-family:var(--f-mono);font-size:12.5px">${p && !p.name ? esc(p.text) : ''}</textarea>
+    <div class="row"><button class="btn sm pri" data-act="uploadsol" data-id="${esc(id)}">Submit to GitHub</button>${sols.length ? `<span class="muted" style="font-size:12.5px">${sols.length} saved</span>` : ''}</div>
+    ${links ? `<ul style="margin:0;padding-left:18px;font-size:12.5px">${links}</ul>` : ''}
+  </div>`;
+}
+document.addEventListener('change', async e => {
+  if (!e.target.classList?.contains('solFile')) return;
+  const f = e.target.files?.[0]; if (!f) return;
+  if (f.size > 200000) { toast('That file is over 200 KB — pick the source file'); return; }
+  pendingSol = {id: e.target.dataset.id, name: f.name, text: await f.text()};
+  const n = e.target.closest('.solbox')?.querySelector('.solName'); if (n) n.textContent = f.name;
+});
+document.addEventListener('input', e => {
+  if (!e.target.classList?.contains('solCode')) return;
+  const id = e.target.dataset.id;
+  if (e.target.value.trim()) pendingSol = {id, name: '', text: e.target.value};
+  else if (pendingSol?.id === id && !pendingSol.name) pendingSol = null;
+});
+async function uploadSolution(id, btn) {
+  const it = ITEMS.get(id);
+  if (!cfg.token || !cfg.owner) { toast('Set up GitHub sync in Setup first'); return; }
+  const pasted = btn.closest('.solbox')?.querySelector('.solCode')?.value?.trim();
+  const src = pendingSol?.id === id && pendingSol.name ? pendingSol : pasted ? {name: '', text: pasted} : null;
+  if (!src) { toast('Choose a file or paste your code first'); return; }
+  const ext = (src.name.match(/\.([A-Za-z0-9]+)$/)?.[1] || 'cpp').toLowerCase();
+  const path = solutionPath(it, ext), repo = cfg.solRepo || cfg.repo, c = LANG[ext];
+  let text = src.text.replace(/\r\n/g, '\n');
+  if (c && it.u && !text.includes(it.u)) text = `${c} ${it.n} (${({CF:'Codeforces',LC:'LeetCode',GFG:'GeeksforGeeks',CSES:'CSES',AC:'AtCoder',USACO:'USACO'})[it.p] || it.p}, rating ${it.r || 'n/a'})\n${c} ${it.u}\n${c} Accepted ${new Date().toLocaleDateString('en-GB')}\n\n` + text;
+  btn.disabled = true; btn.textContent = 'Uploading…';
+  try {
+    const old = await GH.get(path, repo);
+    await GH.put(path, text, old?.sha, `${old ? 'update' : 'add'} ${it.p} ${it.n} (${it.r || 'unrated'})`, repo);
+    const s = itemState(id); (s.solutions ||= []).push({id: uid(), at: Date.now(), path, repo}); s.updatedAt = Date.now();
+    pendingSol = null; touch(); toast(`Saved to ${path}`);
+    if (dlg.open) detailDlg(id); else render();
+  } catch (e) {
+    toast(/404/.test(e.message) ? `Upload failed: the token can't reach "${repo}". Check its repository access.` : 'Upload failed: ' + e.message);
+    btn.disabled = false; btn.textContent = 'Submit to GitHub';
+  }
+}
+
 // ---------------------------------------------------------------- dialogs
 const dlg = $('#dlg'), dlgBody = $('#dlgBody');
 function openDlg(html) { dlgBody.innerHTML = html; if (!dlg.open) dlg.showModal(); }
@@ -773,6 +839,7 @@ function detailDlg(id) {
     <div class="row"><button class="btn pri" data-act="start" data-id="${esc(id)}">Start timer</button><button class="btn" data-act="logtime" data-id="${esc(id)}">Solved in… (enter time)</button><button class="btn" data-act="copyai" data-id="${esc(id)}">Copy for AI</button><button class="btn" data-act="paste" data-id="${esc(id)}">Paste analysis</button>
       <button class="btn" data-act="${s?.skipped ? 'unskip' : 'skip'}" data-id="${esc(id)}">${s?.skipped ? 'Unskip' : 'Skip'}</button>
       ${state.synced[id] && !state.synced[id].off ? (state.synced[id].src === 'manual' ? `<button class="btn" data-act="unmanual" data-id="${esc(id)}">Unmark solved</button>` : `<span class="muted" style="font-size:13px;align-self:center">Solved on ${esc(state.synced[id].src)}</span>`) : `<button class="btn" data-act="manualsolve" data-id="${esc(id)}" title="For problems solved without the timer; counts toward today but not the practice rating">Mark solved (no timer)</button>`}</div>
+    ${SPECIAL.has(it.k) ? '' : solutionBox(id)}
     <div><h3 style="font-size:15px">Attempts</h3><ul style="list-style:none;margin:0;padding:0">${hist || '<li class="muted">None yet.</li>'}</ul></div>
     <div><h3 style="font-size:15px">AI analyses</h3><ul style="list-style:none;margin:0;padding:0">${an || '<li class="muted">None yet. Use Copy for AI, and paste the ANALYSIS block back here.</li>'}</ul></div>`);
 }
@@ -818,7 +885,8 @@ document.addEventListener('click', async e => {
       const dR = D.R - before; toast(`Saved · rating ${dR >= 0 ? '+' : ''}${dR.toFixed(1)} → ${Math.round(D.R)}`);
       break;
     }
-    case 'detail': detailDlg(id); break;
+    case 'detail': pendingSol = null; detailDlg(id); break;
+    case 'uploadsol': uploadSolution(id, b); break;
     case 'close': closeDlg(); break;
     case 'skip': case 'unskip': { const s = itemState(id); s.skipped = act === 'skip'; s.updatedAt = Date.now(); touch(); closeDlg(); render(); break; }
     case 'markdone': { const s = itemState(id); s.done = true; s.doneAt = Date.now(); s.updatedAt = Date.now(); touch(); armed = true; render(); break; }
@@ -847,7 +915,7 @@ document.addEventListener('click', async e => {
     case 'savecfg': {
       const v = k => $('#s_' + k)?.value?.trim();
       if ($('#s_owner')) Object.assign(cfg, {owner: v('owner'), repo: v('repo') || 'cp-tracker-data', branch: v('branch') || 'main', token: v('token')});
-      if ($('#s_cf')) Object.assign(cfg, {cf: v('cf'), ac: v('ac'), initRating: +v('init') || 1100, dailyTarget: +v('target') || 6});
+      if ($('#s_cf')) Object.assign(cfg, {cf: v('cf'), ac: v('ac'), initRating: +v('init') || 1100, dailyTarget: +v('target') || 6, solRepo: v('solrepo') || '', solDir: (v('soldir') || 'solutions').replace(/^\/+|\/+$/g, '')});
       LS.set('cpt.cfg', cfg); toast('Saved');
       if (cfg.token) { const sh = await loadSheet(); if (sh) { const first = !SHEET; initSheet(sh); if (first) tab = 'today'; } render(); if (SHEET) { syncNow(true); autosync(true); } } else render(); break;
     }
