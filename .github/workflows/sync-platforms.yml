@@ -1,0 +1,31 @@
+name: Sync LeetCode and GFG solves
+
+on:
+  schedule:
+    - cron: "17 */3 * * *"   # every 3 hours
+  workflow_dispatch: {}       # "Run workflow" button on the Actions tab
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-platforms
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Fetch recent accepted submissions
+        env:
+          LC_USER: QXyb4olXqq
+          GFG_USER: harshithakella04
+        run: python3 .github/workflows/scripts/sync_platforms.py
+      - name: Commit if changed
+        run: |
+          git config user.name "platform-sync"
+          git config user.email "platform-sync@users.noreply.github.com"
+          git add data/external.json
+          git diff --cached --quiet || (git commit -m "sync LeetCode/GFG solves" && git pull --rebase && git push)
