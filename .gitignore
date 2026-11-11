@@ -1,0 +1,24 @@
+# Video files never go in this repo (the rating-up clip lives in each device's IndexedDB)
+*.mp4
+*.mov
+*.webm
+*.mkv
+*.m4v
+*.avi
+
+# Secrets and local env
+.env*
+
+# Local exports from the app (may contain decrypted notes)
+cp-tracker-*.json
+
+# Local scratch
+scratch/
+tmp/
+*.tmp
+*.bak
+*.swp
+*~
+.DS_Store
+node_modules/
+.claude/settings.local.json

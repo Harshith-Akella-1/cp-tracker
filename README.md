@@ -30,6 +30,19 @@ Practice rating, XP, gold, HP and streak are all derived from the attempt log, s
 was made for the old repo. Edit the token on GitHub (Settings → Developer settings → Fine-grained tokens → your token →
 Repository access) and add `cp-tracker`, or create a new one and paste it into Setup on each device.
 
+## Private notes
+The repo is public, so everything you write yourself — attempt notes, pasted AI analyses, weekly reviews, reward
+names — is encrypted in the browser before it is uploaded (AES-GCM; key derived with PBKDF2 from a passphrase).
+Enter the same passphrase once on each device under Setup → Private notes. It is never uploaded, and the notes can't
+be recovered without it. `data/notes-key.json` holds only the public salt and a check value.
+
+Ratings, times, outcomes, mistake categories, problem IDs, solutions and `STATUS.md` stay public. The public
+`STATUS.md` has no note text; the in-app **Copy**, **Copy for AI** and **Copy weekly review pack** buttons include your
+decrypted notes, so the AI coaching flow works as before.
+
+A device without the passphrase keeps working: its new notes stay on that device until you unlock it, and it never
+touches encrypted notes it can't read.
+
 ## Using other AIs
 - **Copy for AI** (on any problem): copies your status summary, the problem, your current attempt and history, and asks for a fixed `ANALYSIS` block at the end.
 - **Paste analysis**: paste the reply (or just the block) back in; it is stored on the problem and appears in `STATUS.md`.
