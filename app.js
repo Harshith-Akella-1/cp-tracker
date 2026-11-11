@@ -1,5 +1,5 @@
 /* Road to 2000 — CP tracker. Plain JS, no build step.
-   Data: sheet.json (static plan) + state (your logs) synced to a PRIVATE GitHub repo (data/state.json, data/STATUS.md).
+   Data: sheet.json (static plan) + state (your logs) synced to data/state.json + data/STATUS.md in this same repo (cp-tracker) via the GitHub API.
    Everything numeric (practice rating, XP, gold, HP, streak) is DERIVED from the attempt log, so merging two devices
    is just a union of attempts. */
 'use strict';
@@ -57,7 +57,13 @@ function graceDays() {
   return [...m].filter(([, v]) => v.on).map(([d]) => d).sort();
 }
 let state = LS.get('cpt.state', null) || DEFAULT_STATE();
-let cfg = Object.assign({owner: '', repo: 'cp-tracker-data', branch: 'main', token: '', cf: 'Heavenly_Restriction', ac: 'Distant_Horizons', initRating: 1100, dailyTarget: 6}, LS.get('cpt.cfg', {}));
+let cfg = Object.assign({owner: '', repo: 'cp-tracker', branch: 'main', token: '', cf: 'Heavenly_Restriction', ac: 'Distant_Horizons', initRating: 1100, dailyTarget: 6}, LS.get('cpt.cfg', {}));
+// one-time migration: the data and solutions repos were merged into cp-tracker
+if (cfg.repo === 'cp-tracker-data' || cfg.solRepo === 'cp-tracker-solutions' || cfg.solRepo === 'cp-tracker-data') {
+  if (cfg.repo === 'cp-tracker-data') cfg.repo = 'cp-tracker';
+  if (cfg.solRepo === 'cp-tracker-solutions' || cfg.solRepo === 'cp-tracker-data') cfg.solRepo = '';
+  LS.set('cpt.cfg', cfg);
+}
 let timer = LS.get('cpt.timer', null);   // {id, startedAt, acc, running, hints:[], editorial:false, wa:0, alerted:[]}
 let D = null;                            // derived data
 let tab = LS.get('cpt.tab', 'today');
@@ -177,7 +183,7 @@ function derive() {
   return D;
 }
 
-// ---------------------------------------------------------------- GitHub sync (private repo)
+// ---------------------------------------------------------------- GitHub sync (data/ in the app repo)
 const GH = {
   headers() { return {'Authorization': `Bearer ${cfg.token}`, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'}; },
   url(path, repo = cfg.repo) { return `https://api.github.com/repos/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(repo)}/contents/${path.split('/').map(encodeURIComponent).join('/')}`; },
@@ -288,8 +294,8 @@ function gymIndex() {
   for (const it of ITEMS.values()) { const m = (it.u || '').match(/codeforces\.com\/gym\/(\d+)\/problem\/(\w+)/); if (m) GYM_INDEX.set(m[1] + m[2], it.id); }
   return GYM_INDEX;
 }
-// LeetCode + GFG: browsers can't call those sites directly, so a GitHub Action in your private data repo fetches them
-// every few hours into data/external.json; the app reads that file with your token.
+// LeetCode + GFG: browsers can't call those sites directly, so a GitHub Action in this repo fetches them
+// every few hours into data/external.json; the app reads that file through the API with your token.
 const normName = s => String(s || '').toLowerCase().replace(/&/g, 'and').replace(/\(.*?\)/g, '').replace(/[^a-z0-9]/g, '');
 const parenName = s => { const m = String(s || '').match(/\((.*?)\)/); return m ? normName(m[1]) : ''; };
 let GFG_INDEX = null;
@@ -677,16 +683,16 @@ function renderStats() {
 }
 function renderStatus() {
   return `<section class="panel"><div class="row" style="justify-content:space-between"><h3>STATUS.md</h3><div class="row"><button class="btn sm" data-act="copystatus">Copy</button><button class="btn sm" data-act="weekly">Copy weekly review pack</button><button class="btn sm" data-act="pastereview">Paste review</button></div></div>
-    <p class="muted" style="font-size:13px;margin:8px 0 10px">Saved to <span class="mono">data/STATUS.md</span> in your private repo on every sync. Give it, or the weekly pack, to any AI so it starts with full context. Paste the AI's REVIEW or ANALYSIS block back in here.</p>
+    <p class="muted" style="font-size:13px;margin:8px 0 10px">Saved to <span class="mono">data/STATUS.md</span> in your cp-tracker repo on every sync. Give it, or the weekly pack, to any AI so it starts with full context. Paste the AI's REVIEW or ANALYSIS block back in here.</p>
     <pre class="md">${esc(statusMd())}</pre></section>`;
 }
 function renderSettings() {
   const last = LS.get('cpt.lastSync', 0);
-  return `<section class="panel"><h3>Private repo sync</h3>
-    <p class="muted" style="font-size:13.5px;margin:6px 0 12px">The sheet and your log live in your <b>private</b> data repo (<span class="mono">sheet.json</span>, <span class="mono">data/state.json</span>, <span class="mono">data/STATUS.md</span>). The token never leaves this browser: enter it once on each device. Use a fine-grained token for that repo only, with Contents set to read and write.</p>
+  return `<section class="panel"><h3>GitHub sync</h3>
+    <p class="muted" style="font-size:13.5px;margin:6px 0 12px">Your log is saved to <span class="mono">data/state.json</span> and <span class="mono">data/STATUS.md</span> in the same repo as this app (default <span class="mono">cp-tracker</span>), next to <span class="mono">sheet.json</span>. The token never leaves this browser: enter it once on each device. Use a fine-grained token for that repo only, with Contents set to read and write.</p>
     <div class="grid2">
       <label class="f">GitHub username<input type="text" id="s_owner" value="${esc(cfg.owner)}" autocomplete="username" placeholder="Harshith-Akella-1"></label>
-      <label class="f">Private data repo<input type="text" id="s_repo" value="${esc(cfg.repo)}"></label>
+      <label class="f">Repo<input type="text" id="s_repo" value="${esc(cfg.repo)}"></label>
       <label class="f">Branch<input type="text" id="s_branch" value="${esc(cfg.branch)}"></label>
       <label class="f">Token<input type="password" id="s_token" value="${esc(cfg.token)}" autocomplete="off" placeholder="github_pat_…"></label>
     </div>
@@ -696,7 +702,7 @@ function renderSettings() {
       <label class="f">AtCoder handle<input type="text" id="s_ac" value="${esc(cfg.ac)}"></label>
       <label class="f">Starting practice rating<input type="number" id="s_init" value="${esc(cfg.initRating)}"></label>
       <label class="f">Daily target (problems)<input type="number" id="s_target" value="${esc(cfg.dailyTarget)}" min="1"></label>
-      <label class="f">Solutions repo (blank = your data repo)<input type="text" id="s_solrepo" value="${esc(cfg.solRepo || '')}" placeholder="${esc(cfg.repo)}"></label>
+      <label class="f">Solutions repo (blank = same repo)<input type="text" id="s_solrepo" value="${esc(cfg.solRepo || '')}" placeholder="${esc(cfg.repo)}"></label>
       <label class="f">Solutions folder<input type="text" id="s_soldir" value="${esc(cfg.solDir ?? 'solutions')}" placeholder="leave empty for rating folders at the repo root"></label>
     </div><p class="muted" style="font-size:12.5px;margin:8px 0 0">Uploaded code goes to <span class="mono">${esc(cfg.solDir ?? 'solutions') ? esc(cfg.solDir ?? 'solutions') + '/' : ''}&lt;rating&gt;/</span> in that repo; leave the folder empty to put the rating folders at the top level. If you use a different repo, give your token access to it too (Contents: read and write).</p>
     <div class="row" style="margin-top:12px"><button class="btn" data-act="savecfg">Save</button></div></section>
@@ -705,9 +711,9 @@ function renderSettings() {
 }
 function renderOnboarding() {
   return `<section class="onb"><div class="rank" style="grid-template-columns:1fr"><div style="position:relative;z-index:1"><div class="title">Road to 2000</div>
-    <div class="big" style="font-size:44px">Connect your private repo</div>
-    <p class="muted">The sheet and your logs are stored only in your private GitHub repo, so this page shows nothing until it's connected.</p></div></div>
-    <div class="panel"><ol><li>Create a fine-grained token for <span class="mono">cp-tracker-data</span> only, with Contents set to read and write.</li><li>Fill in the form below and tap <b>Save &amp; sync</b>.</li><li>Do the same once on each device.</li></ol></div>
+    <div class="big" style="font-size:44px">Connect your repo</div>
+    <p class="muted">Your logs are stored in your GitHub repo, so connect it once on each device to load and save them.</p></div></div>
+    <div class="panel"><ol><li>Create a fine-grained token for <span class="mono">cp-tracker</span> only, with Contents set to read and write.</li><li>Fill in the form below and tap <b>Save &amp; sync</b>.</li><li>Do the same once on each device.</li></ol></div>
     ${renderSettings()}</section>`;
 }
 let armed = false;   // celebrations only follow your own actions, never a sync
@@ -754,10 +760,11 @@ function solutionPath(it, ext) {
   const dir = cfg.solDir ?? 'solutions';
   return `${dir ? dir + '/' : ''}${band}/${name}`;
 }
+const LEGACY_REPOS = new Set(['cp-tracker-data', 'cp-tracker-solutions']);   // merged into cp-tracker; old links point here now
 function solutionBox(id) {
   const it = ITEMS.get(id), sols = state.items[id]?.solutions || [], repo = cfg.solRepo || cfg.repo;
   const p = pendingSol?.id === id ? pendingSol : null;
-  const links = sols.slice().reverse().map(x => `<li><a href="https://github.com/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(x.repo || repo)}/blob/${encodeURIComponent(cfg.branch)}/${x.path.split('/').map(encodeURIComponent).join('/')}" target="_blank" rel="noopener">${esc(x.path)}</a> <span class="muted">· ${new Date(x.at).toLocaleString('en-GB')}</span></li>`).join('');
+  const links = sols.slice().reverse().map(x => `<li><a href="https://github.com/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(LEGACY_REPOS.has(x.repo) ? repo : (x.repo || repo))}/blob/${encodeURIComponent(cfg.branch)}/${x.path.split('/').map(encodeURIComponent).join('/')}" target="_blank" rel="noopener">${esc(x.path)}</a> <span class="muted">· ${new Date(x.at).toLocaleString('en-GB')}</span></li>`).join('');
   return `<div class="solbox" style="border:1px dashed var(--line-2,var(--line));border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:8px">
     <div class="row" style="justify-content:space-between"><b style="font-size:14px">Accepted code</b><span class="muted" style="font-size:12px">goes to <span class="mono">${esc(solutionPath(it, 'cpp').replace(/[^/]+$/, ''))}</span></span></div>
     <div class="row">
@@ -915,7 +922,7 @@ document.addEventListener('click', async e => {
     case 'addreward': { const n = $('#rwName').value.trim(), c = +$('#rwCost').value; if (!n || !(c > 0)) { toast('Give the reward a name and a cost'); break; } state.rewards.push({id: uid(), name: n, cost: Math.round(c)}); touch(); render(); break; }
     case 'savecfg': {
       const v = k => $('#s_' + k)?.value?.trim();
-      if ($('#s_owner')) Object.assign(cfg, {owner: v('owner'), repo: v('repo') || 'cp-tracker-data', branch: v('branch') || 'main', token: v('token')});
+      if ($('#s_owner')) Object.assign(cfg, {owner: v('owner'), repo: v('repo') || 'cp-tracker', branch: v('branch') || 'main', token: v('token')});
       if ($('#s_cf')) Object.assign(cfg, {cf: v('cf'), ac: v('ac'), initRating: +v('init') || 1100, dailyTarget: +v('target') || 6, solRepo: v('solrepo') || '', solDir: (v('soldir') ?? 'solutions').replace(/^\/+|\/+$/g, '')});
       LS.set('cpt.cfg', cfg); toast('Saved');
       if (cfg.token) { const sh = await loadSheet(); if (sh) { const first = !SHEET; initSheet(sh); if (first) tab = 'today'; } render(); if (SHEET) { syncNow(true); autosync(true); } } else render(); break;
@@ -935,7 +942,7 @@ async function importJson(e) {
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && SHEET) { render(); runTick(); syncNow(); autosync(); } });
 
 // ---------------------------------------------------------------- boot
-// The sheet lives in the PRIVATE data repo (sheet.json at its root), so the public Pages URL shows nothing without your token.
+// sheet.json sits at the root of the app repo: read it through the API (freshest), else the local cache, else the Pages copy.
 function initSheet(sheet) {
   SHEET = sheet; ITEMS = new Map(); ORDER = []; BLOCK_TITLE = {};
   SHEET.meta.blocks.forEach(b => BLOCK_TITLE[b.id] = b.title);

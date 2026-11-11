@@ -3,22 +3,32 @@
 Personal competitive-programming tracker for the "Road to 1600" sheet (Striver A2Z + Codeforces + CSES + AtCoder + USACO Guide, ordered by CF-equivalent rating).
 
 ## Files
-- `index.html`, `app.js` — the app (plain JS, no build step)
+Everything lives in this one repo:
+- `index.html`, `app.js` — the app (plain JS, no build step), served by GitHub Pages from `main` / root
 - `sheet.json` — the day-by-day plan (1,084 items with stable IDs)
 - `manifest.webmanifest`, `icon.svg` — "Add to Home Screen" support
+- `data/state.json` — your attempt log (written by the app through the GitHub API)
+- `data/STATUS.md` — human/AI-readable summary, regenerated on every sync
+- `data/external.json` — LeetCode/GFG solves, written by the sync workflow
+- `solutions/<rating>/*` — accepted code uploaded from the app
+- `.github/workflows/sync-platforms.yml` — fetches LeetCode/GFG solves every 3 hours
 
 ## Where your data lives
-Nothing personal is in this repo. Your log is written to a **separate private repo** (default `cp-tracker-data`):
-- `data/state.json` — every attempt, note, AI analysis, reward, grace day
-- `data/STATUS.md` — human/AI-readable summary, regenerated on every sync
+The app reads and writes `data/` in this repo (`cp-tracker`). It used to be split across `cp-tracker-data` and
+`cp-tracker-solutions`; both were merged in here with their full git history.
 
 Practice rating, XP, gold, HP and streak are all derived from the attempt log, so two devices merge cleanly.
 
 ## Setup
-1. Host this folder with GitHub Pages (repo Settings → Pages → Deploy from branch → `main` / root).
-2. Open the site on each device → Settings → enter GitHub username, data repo name, and a fine-grained token
-   (only the data repo, **Contents: Read and write**). The token stays in that browser's local storage.
-3. Codeforces/AtCoder solves sync automatically from the public APIs whenever the app is opened (at most every 30 min, or via "Check Codeforces / AtCoder").
+1. GitHub Pages: repo Settings → Pages → Deploy from branch → `main` / root.
+2. Open the site on each device → Setup → enter your GitHub username, repo `cp-tracker`, and a fine-grained token
+   with access to `cp-tracker` only and **Contents: Read and write**. The token stays in that browser's local storage.
+3. Codeforces/AtCoder solves sync from their public APIs whenever the app is opened (at most every 30 min, or via "Check all platforms").
+   LeetCode/GFG solves come from the workflow above.
+
+**Existing devices:** the app switches its repo setting from `cp-tracker-data` to `cp-tracker` by itself, but your token
+was made for the old repo. Edit the token on GitHub (Settings → Developer settings → Fine-grained tokens → your token →
+Repository access) and add `cp-tracker`, or create a new one and paste it into Setup on each device.
 
 ## Using other AIs
 - **Copy for AI** (on any problem): copies your status summary, the problem, your current attempt and history, and asks for a fixed `ANALYSIS` block at the end.
