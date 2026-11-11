@@ -436,22 +436,104 @@ function startTimer(id) {
   try { audioCtx ||= new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume?.(); } catch {}
   saveTimer(); tab = 'today'; render(); runTick();
 }
+// The tick runs from a Web Worker when possible: Chrome throttles timers on hidden tabs (down to once a minute after
+// a while), and the tracker is usually hidden behind the problem tab while the clock runs.
+let tickWorker = null;
+function stopTick() { clearInterval(tick); tick = null; if (tickWorker) { tickWorker.terminate(); tickWorker = null; } }
 function runTick() {
-  clearInterval(tick);
-  if (!timer) return;
-  tick = setInterval(() => {
+  stopTick();
+  if (!timer) { document.title = 'Road to 2000'; pipDraw(); return; }
+  const step = () => {
+    if (!timer) { stopTick(); return; }
     const s = elapsed();
     const c = $('#clock'); if (c) c.textContent = mmss(s);
     const rc = $('#rowclock'); if (rc) rc.textContent = mmss(s);
     if (timer.running) renderTimerMs();
+    let alert = null;
     for (const [t, msg] of MILESTONES) if (s >= t && !timer.alerted.includes(t)) {
-      timer.alerted.push(t); saveTimer(); beep(); const b = $('#tbanner'); if (b) { b.textContent = msg; b.hidden = false; }
-      document.title = '⏰ ' + msg.split(' —')[0]; setTimeout(() => document.title = 'Road to 2000', 8000);
+      timer.alerted.push(t); saveTimer(); beep(); alert = msg; const b = $('#tbanner'); if (b) { b.textContent = msg; b.hidden = false; }
     }
-  }, 1000);
+    if (alert) timer.alertUntil = Date.now() + 8000;
+    const it = ITEMS.get(timer.id);
+    document.title = timer.alertUntil > Date.now() ? '⏰ ' + (alert || MILESTONES.filter(([t]) => s >= t).pop()?.[1] || '').split(' —')[0] : `${timer.running ? '⏱' : '⏸'} ${mmss(s)} · ${it?.n || 'Road to 2000'}`;
+    pipDraw();
+  };
+  try {
+    const url = URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 1000)'], {type: 'text/javascript'}));
+    tickWorker = new Worker(url); URL.revokeObjectURL(url); tickWorker.onmessage = step;
+  } catch { tickWorker = null; tick = setInterval(step, 1000); }
+  step();
+}
+
+// ---------------------------------------------------------------- floating timer (video Picture-in-Picture)
+// A click grants one "user activation", and opening a new tab, Document PiP and video PiP each use it up (tested in
+// Chromium 131: after requestPictureInPicture(), window.open and <a target=_blank> are both blocked). So one Start
+// click can't do both. On desktop, Start opens the floating timer and the timer panel offers "Open problem" as the next
+// click; on phones (where web PiP shrinks the whole browser) Start opens the problem tab directly. The timer is drawn on a
+// canvas and streamed into a hidden <video>, which works in Chrome, Edge and Safari; the tab title always shows the clock.
+const PIP = {video: null, canvas: null, ctx: null};
+const isPhone = () => navigator.userAgentData?.mobile ?? /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+const pipSupported = () => !isPhone() && !!(window.HTMLCanvasElement?.prototype.captureStream && (document.pictureInPictureEnabled || HTMLVideoElement.prototype.webkitSupportsPresentationMode));
+function pipPrepare() {
+  if (PIP.video || cfg.pip === false || !pipSupported()) return;
+  try {
+    const c = document.createElement('canvas'); c.width = 400; c.height = 225;
+    const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.setAttribute('playsinline', ''); v.className = 'pipsrc'; v.setAttribute('aria-hidden', 'true');
+    document.body.append(v); Object.assign(PIP, {video: v, canvas: c, ctx: c.getContext('2d')});
+    pipDraw(); v.srcObject = c.captureStream(); v.play().catch(() => {});
+    try {   // the play/pause button in the PiP window pauses and resumes the attempt
+      navigator.mediaSession?.setActionHandler('play', () => { if (timer && !timer.running) { pauseTimer(); runTick(); } });
+      navigator.mediaSession?.setActionHandler('pause', () => { if (timer?.running) { pauseTimer(); runTick(); } });
+    } catch {}
+  } catch { PIP.video = null; }
+}
+function pipDraw() {
+  const {ctx, canvas} = PIP; if (!ctx) return;
+  const css = getComputedStyle(document.documentElement), col = n => css.getPropertyValue(n).trim();
+  const W = canvas.width, H = canvas.height, s = elapsed(), it = timer && ITEMS.get(timer.id);
+  const phaseCol = s >= 1500 ? col('--bad') : s >= 1020 ? col('--warn') : s >= 600 ? col('--r-spec') : (col('--rank') || '#e9c46a');
+  ctx.fillStyle = '#0c0a08'; ctx.fillRect(0, 0, W, H);
+  if (!it) { ctx.fillStyle = '#8c8579'; ctx.font = '500 18px "IBM Plex Mono", monospace'; ctx.textAlign = 'center'; ctx.fillText('no timer running', W / 2, H / 2 + 6); return; }
+  ctx.textAlign = 'left'; ctx.fillStyle = '#d6d0c2'; ctx.font = '500 17px "IBM Plex Sans", system-ui, sans-serif';
+  let name = it.n; while (ctx.measureText(name).width > W - 90 && name.length > 4) name = name.slice(0, -2);
+  ctx.fillText(name === it.n ? name : name + '…', 18, 32);
+  ctx.textAlign = 'right'; ctx.fillStyle = phaseCol; ctx.font = '600 15px "IBM Plex Mono", monospace'; ctx.fillText(String(it.r || ''), W - 18, 32);
+  ctx.textAlign = 'center'; ctx.fillStyle = '#f5efe1'; ctx.font = '500 76px "IBM Plex Mono", monospace';
+  ctx.shadowColor = phaseCol; ctx.shadowBlur = 24; ctx.fillText(mmss(s), W / 2, 128); ctx.shadowBlur = 0;
+  ctx.fillStyle = timer.running ? phaseCol : '#8c8579'; ctx.font = '600 13px "IBM Plex Mono", monospace';
+  ctx.fillText((timer.running ? phaseLabel(s) : 'paused').toUpperCase(), W / 2, 160);
+  const x0 = 18, bw = W - 36, y = 192;   // 25-minute bar with the hint marks
+  ctx.fillStyle = '#2d2820'; ctx.fillRect(x0, y, bw, 6);
+  ctx.fillStyle = phaseCol; ctx.fillRect(x0, y, bw * Math.min(1, s / 1500), 6);
+  ctx.fillStyle = '#f5efe1'; for (const t of [600, 1020]) ctx.fillRect(x0 + bw * t / 1500 - 1, y - 4, 2, 14);
+}
+function pipOpen() {   // call synchronously inside a click handler
+  const v = PIP.video; if (!v || document.pictureInPictureElement === v) return false;
+  pipDraw();
+  try {
+    if (v.requestPictureInPicture && document.pictureInPictureEnabled) { v.requestPictureInPicture().catch(() => {}); return true; }
+    if (v.webkitSupportsPresentationMode?.('picture-in-picture')) { v.webkitSetPresentationMode('picture-in-picture'); return true; }
+  } catch {}
+  return false;
+}
+function pipClose() {
+  const v = PIP.video; if (!v) return;
+  try { if (document.pictureInPictureElement === v) document.exitPictureInPicture().catch(() => {}); else if (v.webkitPresentationMode === 'picture-in-picture') v.webkitSetPresentationMode('inline'); } catch {}
+}
+// Start: the click can open the floating timer or the problem tab, not both (see above).
+function startFromClick(id) {
+  const it = ITEMS.get(id);
+  startTimer(id);
+  if (cfg.pip !== false && pipOpen()) return 'pip';   // the timer panel now leads with "Open problem"
+  if (it.u && cfg.openTab !== false) {
+    const w = window.open(it.u, '_blank');
+    if (w) { try { w.opener = null; } catch {} return 'tab'; }
+    toast('The browser blocked the new tab. Use Open problem.');
+  }
+  return null;
 }
 function pauseTimer() { if (!timer) return; if (timer.running) { timer.acc = elapsed(); timer.running = false; } else { timer.startedAt = Date.now(); timer.running = true; } saveTimer(); render(); }
-function discardTimer() { timer = null; saveTimer(); clearInterval(tick); render(); }
+function discardTimer() { timer = null; saveTimer(); stopTick(); pipClose(); runTick(); render(); }
 
 // ---------------------------------------------------------------- AI packs
 function shortStatus() {
@@ -677,6 +759,7 @@ function timerPanel() {
       <div><div class="kicker">${timer.running ? 'Solving' : 'Paused'} · ${esc(it.p)} · est ${it.m} min</div>
         <h2 style="margin-top:2px">${it.u ? `<a href="${esc(it.u)}" target="_blank" rel="noopener" style="color:var(--fg);text-decoration:none">${esc(it.n)} ${ICON.ext}</a>` : esc(it.n)} <span class="num" style="color:${rcol(it.r)};font-size:16px">${it.r || ''}</span></h2></div>
       <div class="banner" id="tbanner" hidden></div>
+      ${it.u ? `<div class="row"><a class="btn pri" href="${esc(it.u)}" target="_blank" rel="noopener">Open problem ${ICON.ext}</a>${PIP.video ? '<button class="btn ghost" data-act="pip" title="Show the timer in a small always-on-top window">Pop out timer</button>' : ''}</div>` : ''}
       ${timer.running ? `<div class="row">
         <button class="btn ${timer.hints.includes(1) ? 'on' : ''}" data-act="hint" data-h="1">Hint 1</button>
         <button class="btn ${timer.hints.includes(2) ? 'on' : ''}" data-act="hint" data-h="2">Hint 2</button>
@@ -862,6 +945,8 @@ function renderSettings() {
       <label class="f">AtCoder handle<input type="text" id="s_ac" value="${esc(cfg.ac)}"></label>
       <label class="f">Starting practice rating<input type="number" id="s_init" value="${esc(cfg.initRating)}"></label>
       <label class="f">Daily target (problems)<input type="number" id="s_target" value="${esc(cfg.dailyTarget)}" min="1"></label>
+      <label class="f" style="flex-direction:row;align-items:center;gap:8px;color:var(--fg)"><input type="checkbox" id="s_opentab" ${cfg.openTab !== false ? 'checked' : ''}> Start opens the problem in a new tab${pipSupported() ? ' (when the floating timer is off)' : ''}</label>
+      <label class="f" style="flex-direction:row;align-items:center;gap:8px;color:var(--fg)"><input type="checkbox" id="s_pip" ${cfg.pip !== false ? 'checked' : ''} ${pipSupported() ? '' : 'disabled'}> Floating timer when I press Start${pipSupported() ? '' : ' (not supported in this browser)'}</label>
       <label class="f">Solutions repo (blank = same repo)<input type="text" id="s_solrepo" value="${esc(cfg.solRepo || '')}" placeholder="${esc(cfg.repo)}"></label>
       <label class="f">Solutions folder<input type="text" id="s_soldir" value="${esc(cfg.solDir ?? 'solutions')}" placeholder="leave empty for rating folders at the repo root"></label>
     </div><p class="muted" style="font-size:12.5px;margin:8px 0 0">Uploaded code goes to <span class="mono">${esc(cfg.solDir ?? 'solutions') ? esc(cfg.solDir ?? 'solutions') + '/' : ''}&lt;rating&gt;/</span> in that repo; leave the folder empty to put the rating folders at the top level. If you use a different repo, give your token access to it too (Contents: read and write).</p>
@@ -1037,7 +1122,8 @@ document.addEventListener('click', async e => {
   if (b.dataset.tab) { tab = b.dataset.tab; LS.set('cpt.tab', tab); render(); window.scrollTo(0, 0); return; }
   const act = b.dataset.act, id = b.dataset.id;
   switch (act) {
-    case 'start': if (timer && timer.id !== id) { toast('Finish or discard the running timer first'); break; } closeDlg(); if (!timer) startTimer(id); else { tab = 'today'; render(); } window.scrollTo(0, 0); break;
+    case 'start': if (timer && timer.id !== id) { toast('Finish or discard the running timer first'); break; } closeDlg(); if (!timer) startFromClick(id); else { tab = 'today'; render(); } window.scrollTo(0, 0); break;
+    case 'pip': if (!pipOpen()) toast('Floating timer isn\'t available in this browser'); break;
     case 'pause': pauseTimer(); runTick(); break;
     case 'hint': { const h = +b.dataset.h; timer.hints = timer.hints.includes(h) ? timer.hints.filter(x => x !== h) : [...timer.hints, h].sort(); saveTimer(); render(); break; }
     case 'editorial': timer.editorial = !timer.editorial; saveTimer(); render(); break;
@@ -1060,7 +1146,7 @@ document.addEventListener('click', async e => {
       s.attempts.push({id: uid(), start: t ? t.began : now - sec * 1000, end: now, sec, hints, editorial: ed || outcome === 'editorial', wa,
                        outcome, mistake: $('#f_mis').value, notes: $('#f_notes').value.trim(), r: it.r, ...(mode !== 'timer' ? {timeEntered: true} : {})});
       s.updatedAt = now; s.skipped = false;
-      const before = D.R; if (t) { timer = null; saveTimer(); clearInterval(tick); } closeDlg(); touch(); armed = true; render();
+      const before = D.R; if (t) { timer = null; saveTimer(); stopTick(); pipClose(); runTick(); } closeDlg(); touch(); armed = true; render();
       const dR = D.R - before; toast(`Saved · rating ${dR >= 0 ? '+' : ''}${dR.toFixed(1)} → ${Math.round(D.R)}`);
       break;
     }
@@ -1095,7 +1181,8 @@ document.addEventListener('click', async e => {
     case 'savecfg': {
       const v = k => $('#s_' + k)?.value?.trim();
       if ($('#s_owner')) Object.assign(cfg, {owner: v('owner'), repo: v('repo') || 'cp-tracker', branch: v('branch') || 'main', token: v('token')});
-      if ($('#s_cf')) Object.assign(cfg, {cf: v('cf'), ac: v('ac'), initRating: +v('init') || 1100, dailyTarget: +v('target') || 6, solRepo: v('solrepo') || '', solDir: (v('soldir') ?? 'solutions').replace(/^\/+|\/+$/g, '')});
+      if ($('#s_cf')) Object.assign(cfg, {cf: v('cf'), ac: v('ac'), initRating: +v('init') || 1100, dailyTarget: +v('target') || 6, solRepo: v('solrepo') || '', solDir: (v('soldir') ?? 'solutions').replace(/^\/+|\/+$/g, ''), openTab: $('#s_opentab').checked, pip: $('#s_pip').checked});
+      if (cfg.pip) pipPrepare();
       LS.set('cpt.cfg', cfg); toast('Saved');
       if (cfg.token) { const sh = await loadSheet(); if (sh) { const first = !SHEET; initSheet(sh); if (first) tab = 'today'; } render(); if (SHEET) { syncNow(true); autosync(true); } } else render(); break;
     }
@@ -1143,7 +1230,7 @@ async function boot() {
   const sh = await loadSheet();
   if (sh) initSheet(sh);
   if (!SHEET) tab = 'settings';
-  render(); runTick();
+  render(); runTick(); pipPrepare();
   if (SHEET) { syncNow(); autosync(); }
 }
 boot();
