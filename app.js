@@ -951,6 +951,18 @@ function renderSettings() {
       <label class="f">Solutions folder<input type="text" id="s_soldir" value="${esc(cfg.solDir ?? 'solutions')}" placeholder="leave empty for rating folders at the repo root"></label>
     </div><p class="muted" style="font-size:12.5px;margin:8px 0 0">Uploaded code goes to <span class="mono">${esc(cfg.solDir ?? 'solutions') ? esc(cfg.solDir ?? 'solutions') + '/' : ''}&lt;rating&gt;/</span> in that repo; leave the folder empty to put the rating folders at the top level. If you use a different repo, give your token access to it too (Contents: read and write).</p>
     <div class="row" style="margin-top:12px"><button class="btn" data-act="savecfg">Save</button></div></section>
+  <section class="panel"><h3 class="rule">Rating-up moment</h3>
+    <p class="muted" style="font-size:13.5px;margin:6px 0 12px">Each time a logged attempt raises your rating, play a short clip, such as the "Welcome to Facebook" scene from <i>The Social Network</i> (2010, Columbia Pictures, dir. David Fincher), with that credit on screen. Pick the file once on each device. It stays in this browser's storage and is never uploaded.</p>
+    <div class="row"><span class="dot ${CLIP.url ? 'ok' : ''}"></span><span style="font-size:13.5px">${CLIP.url ? `${esc(CLIP.name)} · ${(CLIP.size / 1048576).toFixed(1)} MB` : 'No clip picked, so nothing plays.'}</span></div>
+    <div class="grid2" style="margin-top:10px">
+      <label class="f" style="flex-direction:row;align-items:center;gap:8px;color:var(--fg)"><input type="checkbox" id="s_clipon" ${cfg.clipOn !== false ? 'checked' : ''}> Play it when my rating goes up</label>
+      <label class="f" style="flex-direction:row;align-items:center;gap:8px;color:var(--fg)"><input type="checkbox" id="s_clipmuted" ${cfg.clipMuted ? 'checked' : ''}> Mute</label>
+      <label class="f">Start at (seconds)<input type="number" id="s_clipstart" min="0" step="0.5" value="${esc(cfg.clipStart ?? 0)}"></label>
+      <label class="f">Play for (seconds)<input type="number" id="s_cliplen" min="2" step="1" value="${esc(cfg.clipLen ?? 12)}"></label>
+    </div>
+    <div class="row" style="margin-top:12px"><label class="btn">${CLIP.url ? 'Replace clip' : 'Choose clip'}<input type="file" id="clipFile" accept="video/*" hidden></label>
+      ${CLIP.url ? '<button class="btn" data-act="clippreview">Preview</button><button class="btn ghost danger" data-act="clipremove">Remove</button>' : ''}
+      <button class="btn" data-act="clipsave">Save</button></div></section>
   <section class="panel"><h3 class="rule">Backup</h3><p class="muted" style="font-size:13.5px;margin:6px 0 12px">Export the full log as JSON for any AI or for safekeeping, or import one to merge it in.</p>
     <div class="row"><button class="btn" data-act="export">Export JSON</button><label class="btn">Import JSON<input type="file" id="importFile" accept="application/json" hidden></label><button class="btn ghost danger" data-act="resetlocal">Clear this device's copy</button></div></section>`;
 }
@@ -985,13 +997,58 @@ function render() {
     $('#sq')?.addEventListener('input', e => { sheetQ = e.target.value; const pos = e.target.selectionStart; render(); const n = $('#sq'); n.focus(); n.setSelectionRange(pos, pos); });
     main.querySelectorAll('details.wk').forEach(el => el.addEventListener('toggle', () => el.open ? sheetOpen.add(el.dataset.k) : sheetOpen.delete(el.dataset.k)));
   }
-  if (tab === 'settings') $('#importFile')?.addEventListener('change', importJson);
+  if (tab === 'settings') { $('#importFile')?.addEventListener('change', importJson); $('#clipFile')?.addEventListener('change', e => { const f = e.target.files?.[0]; if (f) pickClip(f); }); }
   const tn = $('#tnotes'); if (tn) tn.addEventListener('input', e => { timer.notes = e.target.value; saveTimer(); });
   if (armed) {
     armed = false;
     if (prevLevel && D.level > prevLevel) { celebrate(); toast(`Level up · LV ${D.level}`, true); }
     else if (prevToday != null && prevToday < D.target && D.todaySolved >= D.target) { celebrate(); toast('Daily target hit', true); }
   }
+}
+
+// ---------------------------------------------------------------- "Welcome to Facebook" moment
+// When a logged attempt raises your rating, play the clip you picked in Setup (The Social Network, 2010). The file lives
+// only in this device's IndexedDB: it is never committed, uploaded or served from Pages. No clip picked = no moment.
+const CLIP_CREDIT = 'The Social Network (2010) · Columbia Pictures · dir. David Fincher';
+const CLIP = {url: null, name: '', size: 0};
+const mediaDB = () => new Promise((res, rej) => { const r = indexedDB.open('cpt-media', 1); r.onupgradeneeded = () => r.result.createObjectStore('blobs'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+async function mediaOp(mode, fn) { const db = await mediaDB(); return new Promise((res, rej) => { const tx = db.transaction('blobs', mode), q = fn(tx.objectStore('blobs')); tx.oncomplete = () => res(q?.result); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error); }); }
+async function loadClip() {
+  try { const rec = await mediaOp('readonly', st => st.get('rating-up'));
+    if (CLIP.url) URL.revokeObjectURL(CLIP.url);
+    Object.assign(CLIP, rec?.blob ? {url: URL.createObjectURL(rec.blob), name: rec.name, size: rec.blob.size} : {url: null, name: '', size: 0});
+  } catch { Object.assign(CLIP, {url: null, name: '', size: 0}); }
+}
+async function pickClip(file) {
+  if (!file.type.startsWith('video/')) { toast('Pick a video file'); return; }
+  try { navigator.storage?.persist?.(); } catch {}
+  try { await mediaOp('readwrite', st => st.put({blob: file, name: file.name, at: Date.now()}, 'rating-up')); await loadClip(); toast('Clip saved on this device'); }
+  catch (e) { toast('Could not store the clip: ' + (e?.message || e)); }
+  render();
+}
+async function removeClip() { try { await mediaOp('readwrite', st => st.delete('rating-up')); } catch {} await loadClip(); render(); toast('Clip removed from this device'); }
+// call synchronously from the click that saved the attempt, so the browser lets it play with sound
+function playClip(dR, R) {
+  if (!CLIP.url || cfg.clipOn === false) return false;
+  document.querySelector('.clipov')?.remove();
+  const ov = document.createElement('div'); ov.className = 'clipov'; ov.setAttribute('role', 'dialog'); ov.setAttribute('aria-label', 'Rating up');
+  ov.innerHTML = `<div class="clipbox"><video playsinline preload="auto"></video>
+    <div class="cliprow"><span class="clipdelta num">+${dR.toFixed(1)} <small>→ ${Math.round(R)}</small></span><button class="btn sm" data-clipclose>Skip</button></div>
+    <div class="clipcredit">${esc(CLIP_CREDIT)}</div></div>`;
+  document.body.append(ov);
+  const v = ov.querySelector('video'), start = Math.max(0, +cfg.clipStart || 0), len = Math.max(2, +cfg.clipLen || 12);
+  let stopT = null;
+  const close = () => { clearTimeout(stopT); v.pause(); ov.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = e => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  ov.addEventListener('click', e => { if (e.target === ov || e.target.closest('[data-clipclose]')) close(); });
+  v.addEventListener('ended', close);
+  v.muted = !!cfg.clipMuted; v.src = CLIP.url;
+  try { v.currentTime = start; } catch {}
+  v.addEventListener('loadedmetadata', () => { if (Math.abs(v.currentTime - start) > 0.5) try { v.currentTime = start; } catch {} }, {once: true});
+  const go = () => { stopT = setTimeout(close, len * 1000 + 400); };
+  v.play().then(go, () => { v.muted = true; v.play().then(go, close); });   // if sound is refused, play it muted
+  return true;
 }
 
 // one orchestrated moment: a short burst in your rank colour when you level up or hit the daily target
@@ -1148,6 +1205,7 @@ document.addEventListener('click', async e => {
       s.updatedAt = now; s.skipped = false;
       const before = D.R; if (t) { timer = null; saveTimer(); stopTick(); pipClose(); runTick(); } closeDlg(); touch(); armed = true; render();
       const dR = D.R - before; toast(`Saved · rating ${dR >= 0 ? '+' : ''}${dR.toFixed(1)} → ${Math.round(D.R)}`);
+      if (dR > 0) playClip(dR, D.R);
       break;
     }
     case 'detail': pendingSol = null; detailDlg(id); break;
@@ -1192,6 +1250,9 @@ document.addEventListener('click', async e => {
       catch (err) { toast(err.message); b.disabled = false; b.textContent = 'Unlock notes'; }
       break;
     }
+    case 'clipsave': Object.assign(cfg, {clipOn: $('#s_clipon').checked, clipMuted: $('#s_clipmuted').checked, clipStart: Math.max(0, +$('#s_clipstart').value || 0), clipLen: Math.max(2, +$('#s_cliplen').value || 12)}); LS.set('cpt.cfg', cfg); toast('Saved'); break;
+    case 'clippreview': { const on = cfg.clipOn; cfg.clipOn = true; playClip(12.3, (D?.R || 1100) + 12.3); cfg.clipOn = on; break; }
+    case 'clipremove': removeClip(); break;
     case 'forgetpass': forgetPassphrase(); render(); toast('Passphrase forgotten on this device'); break;
     case 'export': {
       const plain = JSON.parse(JSON.stringify(state)); eachSealed(plain, (r, f, k) => { if (NOTES[k] != null) r[f] = NOTES[k]; });   // local file: notes included
@@ -1231,6 +1292,7 @@ async function boot() {
   if (sh) initSheet(sh);
   if (!SHEET) tab = 'settings';
   render(); runTick(); pipPrepare();
+  loadClip().then(() => { if (tab === 'settings') render(); });
   if (SHEET) { syncNow(); autosync(); }
 }
 boot();
