@@ -594,6 +594,20 @@ function renderMinis() {
     <span class="mini" title="${esc(syncState.msg)}"><span class="dot ${syncCls}"></span><span class="hide-s">${syncState.status === 'err' ? 'sync error' : syncState.status === 'busy' ? 'syncing' : syncState.status === 'ok' ? 'synced' : 'local'}</span></span>`;
 }
 const renderChips = renderMinis;
+// market tape: the last attempts with their rating moves, scrolling like a price ticker (static when motion is reduced)
+function renderTape() {
+  const el = $('#tape'); if (!el || !D) return;
+  const rows = D.att.slice(-14).reverse().map(a => {
+    const it = ITEMS.get(a.id) || {}, dR = D.dRmap[a.aid];
+    const mv = dR == null ? '<span>·</span>' : `<span class="${dR >= 0 ? 'up' : 'dn'}">${dR >= 0 ? '▲' : '▼'} ${Math.abs(dR).toFixed(1)}</span>`;
+    return `<span><b>${esc(it.p || '')} ${esc(it.n || a.id)}</b> ${it.r || ''} ${mv}</span>`;
+  });
+  if (!rows.length) { el.innerHTML = ''; return; }
+  const html = `<span><b>RATING</b> ${Math.round(D.R)}</span>` + rows.join('');
+  if (el.dataset.k === html) return;   // don't restart the scroll on every render
+  el.dataset.k = html;
+  el.innerHTML = `<div class="run">${html}${html}</div>`;
+}
 
 function rankCard() {
   const d = D, rnk = rankOf(d.R), next = RANKS[RANKS.indexOf(rnk) + 1];
@@ -780,7 +794,7 @@ function renderStats() {
   <section class="panel"><div class="row" style="justify-content:space-between"><h3>Rewards shop</h3><span class="mini num" style="color:var(--r-master)">◆ ${d.gold} gold</span></div>
     <ol class="quests" style="margin-top:10px">${state.rewards.map(r => `<li class="q" style="grid-template-columns:minmax(0,1fr) auto"><div class="nm"><span class="t">${esc(shown(noteOf('w', r, 'name')) || 'Reward')}</span><div class="sub"><span class="num" style="color:var(--r-master)">◆ ${r.cost}</span></div></div><div class="acts"><button class="btn sm pri" data-act="redeem" data-id="${r.id}" ${d.gold < r.cost ? 'disabled' : ''}>Redeem</button><button class="btn sm ghost" data-act="delreward" data-id="${r.id}">Remove</button></div></li>`).join('')}</ol>
     <div class="row" style="margin-top:10px"><input type="text" id="rwName" placeholder="Reward, e.g. a movie night" style="flex:2;min-width:140px;width:auto"><input type="number" id="rwCost" placeholder="Cost" min="1" style="flex:1;min-width:80px;width:auto"><button class="btn" data-act="addreward">Add</button></div></section>
-  <section class="panel"><h3>Topics</h3><div class="scroll" style="margin-top:8px"><table class="t num"><thead><tr><th>Topic</th><th>Att.</th><th>Clean</th><th>Hint</th><th>Edit.</th><th>Unsolved</th><th>Time vs est.</th><th>Avg rating</th></tr></thead><tbody>
+  <section class="panel"><h3 class="rule">Topics</h3><div class="scroll" style="margin-top:8px"><table class="t num"><thead><tr><th>Topic</th><th>Att.</th><th>Clean</th><th>Hint</th><th>Edit.</th><th>Unsolved</th><th>Time vs est.</th><th>Avg rating</th></tr></thead><tbody>
     ${topics.map(([k, T]) => `<tr><td>${esc(k)}</td><td>${T.n}</td><td style="color:var(--good)">${T.clean}</td><td>${T.hint}</td><td style="color:var(--warn)">${T.ed}</td><td>${T.fail}</td><td>${(T.ratio / T.n).toFixed(2)}×</td><td style="color:${rcol(Math.round(T.rsum / T.n))}">${Math.round(T.rsum / T.n)}</td></tr>`).join('') || '<tr><td colspan="8" class="muted">No logged attempts yet.</td></tr>'}
   </tbody></table></div></section>`;
 }
@@ -791,7 +805,7 @@ function renderStatus() {
 }
 function renderSettings() {
   const last = LS.get('cpt.lastSync', 0);
-  return `<section class="panel"><h3>GitHub sync</h3>
+  return `<section class="panel"><h3 class="rule">GitHub sync</h3>
     <p class="muted" style="font-size:13.5px;margin:6px 0 12px">Your log is saved to <span class="mono">data/state.json</span> and <span class="mono">data/STATUS.md</span> in the same repo as this app (default <span class="mono">cp-tracker</span>), next to <span class="mono">sheet.json</span>. The token never leaves this browser: enter it once on each device. Use a fine-grained token for that repo only, with Contents set to read and write.</p>
     <div class="grid2">
       <label class="f">GitHub username<input type="text" id="s_owner" value="${esc(cfg.owner)}" autocomplete="username" placeholder="Harshith-Akella-1"></label>
@@ -801,7 +815,7 @@ function renderSettings() {
     </div>
     <div class="row" style="margin-top:12px"><button class="btn pri" data-act="savecfg">Save &amp; sync</button><span class="muted" style="font-size:12.5px">${last ? 'Last synced ' + new Date(last).toLocaleString('en-GB') : 'Not synced yet'} ${syncState.status === 'err' ? '· <span style="color:var(--bad)">' + esc(syncState.msg) + '</span>' : ''}</span></div></section>
   ${notesPanel()}
-  <section class="panel"><h3>Practice</h3><div class="grid2" style="margin-top:10px">
+  <section class="panel"><h3 class="rule">Practice</h3><div class="grid2" style="margin-top:10px">
       <label class="f">Codeforces handle<input type="text" id="s_cf" value="${esc(cfg.cf)}"></label>
       <label class="f">AtCoder handle<input type="text" id="s_ac" value="${esc(cfg.ac)}"></label>
       <label class="f">Starting practice rating<input type="number" id="s_init" value="${esc(cfg.initRating)}"></label>
@@ -810,7 +824,7 @@ function renderSettings() {
       <label class="f">Solutions folder<input type="text" id="s_soldir" value="${esc(cfg.solDir ?? 'solutions')}" placeholder="leave empty for rating folders at the repo root"></label>
     </div><p class="muted" style="font-size:12.5px;margin:8px 0 0">Uploaded code goes to <span class="mono">${esc(cfg.solDir ?? 'solutions') ? esc(cfg.solDir ?? 'solutions') + '/' : ''}&lt;rating&gt;/</span> in that repo; leave the folder empty to put the rating folders at the top level. If you use a different repo, give your token access to it too (Contents: read and write).</p>
     <div class="row" style="margin-top:12px"><button class="btn" data-act="savecfg">Save</button></div></section>
-  <section class="panel"><h3>Backup</h3><p class="muted" style="font-size:13.5px;margin:6px 0 12px">Export the full log as JSON for any AI or for safekeeping, or import one to merge it in.</p>
+  <section class="panel"><h3 class="rule">Backup</h3><p class="muted" style="font-size:13.5px;margin:6px 0 12px">Export the full log as JSON for any AI or for safekeeping, or import one to merge it in.</p>
     <div class="row"><button class="btn" data-act="export">Export JSON</button><label class="btn">Import JSON<input type="file" id="importFile" accept="application/json" hidden></label><button class="btn ghost danger" data-act="resetlocal">Clear this device's copy</button></div></section>`;
 }
 function notesPanel() {
@@ -818,7 +832,7 @@ function notesPanel() {
   const line = noteKey ? `Unlocked on this device.${ns.pending ? ` ${ns.pending} note${ns.pending > 1 ? 's' : ''} will be encrypted on the next sync.` : ''}`
     : ns.sealed ? `Locked: ${ns.locked} encrypted note${ns.locked === 1 ? '' : 's'} can't be read here until you enter the passphrase. They stay safe in the repo meanwhile.`
     : `Not set up. ${ns.pending ? `${ns.pending} note${ns.pending > 1 ? 's' : ''} on this device stay${ns.pending > 1 ? '' : 's'} here and aren't uploaded until you set a passphrase.` : ''}`;
-  return `<section class="panel"><h3>Private notes</h3>
+  return `<section class="panel"><h3 class="rule">Private notes</h3>
     <p class="muted" style="font-size:13.5px;margin:6px 0 12px">The repo is public. Your notes, AI analyses, reviews and reward names are encrypted in this browser before they're uploaded (AES-GCM, key derived from your passphrase). Use the same passphrase on every device. It is never uploaded, and there is no way to recover the notes without it.</p>
     <div class="row"><span class="dot ${noteKey ? 'ok' : ns.locked ? 'err' : ''}"></span><span style="font-size:13.5px">${esc(line)}</span></div>
     ${noteKey ? `<div class="row" style="margin-top:12px"><button class="btn ghost" data-act="forgetpass">Forget passphrase on this device</button></div>`
@@ -836,7 +850,7 @@ function render() {
   if (!SHEET) { $('#main').innerHTML = renderOnboarding(); return; }
   const prevLevel = D?.level, prevToday = D?.todaySolved;
   derive();
-  renderMinis();
+  renderMinis(); renderTape();
   document.querySelectorAll('#tabs button').forEach(b => b.setAttribute('aria-current', b.dataset.tab === tab ? 'page' : 'false'));
   const main = $('#main');
   main.innerHTML = tab === 'today' ? renderToday() : tab === 'sheet' ? renderSheet() : tab === 'stats' ? renderStats() : tab === 'status' ? renderStatus() : renderSettings();
