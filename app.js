@@ -70,7 +70,96 @@ let tab = LS.get('cpt.tab', 'today');
 let syncState = {status: 'idle', msg: ''};
 
 function itemState(id) { return state.items[id] || (state.items[id] = {attempts: [], analyses: []}); }
-function touch() { state.updatedAt = Date.now(); LS.set('cpt.state', state); scheduleSync(); }
+function touch() { state.updatedAt = Date.now(); stripPlain(state); LS.set('cpt.state', state); scheduleSync(); }
+
+// ---------------------------------------------------------------- private notes (client-side encryption)
+// The repo is public, so free text you write (attempt notes, AI analyses, weekly reviews, reward names) never goes to
+// GitHub as plaintext. In state.json each such field is an empty string plus `<field>Enc: {enc:'v1', iv, ct, at}`
+// (AES-GCM-256; key = PBKDF2-SHA-256(passphrase, salt from data/notes-key.json)). Older builds just see empty strings.
+// Plaintext lives only on this device (localStorage cpt.notes). A device without the key never uploads plaintext and
+// carries ciphertext it can't read through every merge untouched.
+const SEALED = [   // [key prefix, field, records in a state]
+  ['a', 'notes', st => Object.values(st.items || {}).flatMap(s => s.attempts || [])],
+  ['n', 'text', st => Object.values(st.items || {}).flatMap(s => s.analyses || [])],
+  ['r', 'text', st => st.reviews || []],
+  ['w', 'name', st => st.rewards || []],
+  ['d', 'name', st => st.redeemed || []],
+];
+const KEY_PATH = 'data/notes-key.json', NOTE_CHECK = 'cp-tracker notes v1', KDF_ITER = 600000;
+let NOTES = LS.get('cpt.notes', {});   // 'a:<attemptId>' -> plaintext, this device only
+let noteKey = null;                    // AES-GCM CryptoKey once unlocked
+const DECFAIL = new Set();
+const u8b64 = u => { let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000)); return btoa(s); };
+const b64u8 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const utf8 = s => new TextEncoder().encode(s);
+const importRawKey = b64 => crypto.subtle.importKey('raw', b64u8(b64), 'AES-GCM', false, ['encrypt', 'decrypt']);
+async function deriveRaw(pass, salt, iter) {
+  const base = await crypto.subtle.importKey('raw', utf8(pass.normalize('NFC')), 'PBKDF2', false, ['deriveBits']);
+  return u8b64(new Uint8Array(await crypto.subtle.deriveBits({name: 'PBKDF2', hash: 'SHA-256', salt: b64u8(salt), iterations: iter}, base, 256)));
+}
+async function sealText(key, text, aad) {   // aad binds the ciphertext to its record, so blobs can't be swapped around
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({name: 'AES-GCM', iv, additionalData: utf8(aad)}, key, utf8(text));
+  return {enc: 'v1', iv: u8b64(iv), ct: u8b64(new Uint8Array(ct)), at: Date.now()};
+}
+async function openText(key, blob, aad) {
+  return new TextDecoder().decode(await crypto.subtle.decrypt({name: 'AES-GCM', iv: b64u8(blob.iv), additionalData: utf8(aad)}, key, b64u8(blob.ct)));
+}
+function eachSealed(st, fn) { for (const [p, f, recs] of SEALED) for (const r of recs(st)) if (r && typeof r === 'object' && r.id != null) fn(r, f, p + ':' + r.id); }
+// move any plaintext out of a state into the device-local NOTES map (synchronous, safe without a key)
+function stripPlain(st) {
+  let moved = false;
+  eachSealed(st, (r, f, k) => { if (typeof r[f] === 'string' && r[f]) { NOTES[k] = r[f]; r[f] = ''; moved = true; } });
+  if (moved) LS.set('cpt.notes', NOTES);
+  return st;
+}
+const hasPlain = st => { let x = false; eachSealed(st, (r, f) => { if (typeof r[f] === 'string' && r[f]) x = true; }); return x; };
+async function encryptPending(st) {
+  if (!noteKey) return 0; let n = 0; const todo = [];
+  eachSealed(st, (r, f, k) => { if (NOTES[k] && !r[f + 'Enc']) todo.push([r, f, k]); });
+  for (const [r, f, k] of todo) { r[f + 'Enc'] = await sealText(noteKey, NOTES[k], k); n++; }
+  return n;
+}
+async function decryptAll(st) {
+  if (!noteKey) return 0; let n = 0; const todo = [];
+  eachSealed(st, (r, f, k) => { const b = r[f + 'Enc']; if (b?.enc === 'v1' && NOTES[k] == null && !DECFAIL.has(k)) todo.push([b, k]); });
+  for (const [b, k] of todo) { try { NOTES[k] = await openText(noteKey, b, k); n++; } catch { DECFAIL.add(k); } }
+  if (n) LS.set('cpt.notes', NOTES);
+  return n;
+}
+// plaintext for a record's sealed field: '' if there is none, null if it exists but is locked on this device
+function noteOf(p, r, f) {
+  if (!r) return ''; if (typeof r[f] === 'string' && r[f]) return r[f];
+  const v = NOTES[p + ':' + r.id]; return v != null ? v : r[f + 'Enc'] ? null : '';
+}
+const LOCKED = '(encrypted — unlock notes in Setup)';
+function noteStats() {
+  let locked = 0, pending = 0, sealed = 0;
+  eachSealed(state, (r, f, k) => { if (r[f + 'Enc']) { sealed++; if (NOTES[k] == null) locked++; } else if (NOTES[k]) pending++; });
+  return {locked, pending, sealed};
+}
+async function setPassphrase(pass) {
+  if (!cfg.token || !cfg.owner) throw new Error('Connect GitHub first');
+  if (pass.length < 8) throw new Error('Use at least 8 characters');
+  const f = await GH.get(KEY_PATH); let meta = f ? JSON.parse(f.text) : null, raw = null;
+  if (!meta) {
+    const salt = u8b64(crypto.getRandomValues(new Uint8Array(16)));
+    raw = await deriveRaw(pass, salt, KDF_ITER);
+    meta = {v: 1, kdf: 'PBKDF2-SHA-256', iter: KDF_ITER, cipher: 'AES-GCM-256', salt, check: await sealText(await importRawKey(raw), NOTE_CHECK, 'check'),
+            about: 'Public parameters for the encrypted notes in state.json. Contains no secret: the key comes from a passphrase entered on each device.'};
+    try { await GH.put(KEY_PATH, JSON.stringify(meta, null, 1) + '\n', null, 'notes: create encryption parameters (salt only)'); }
+    catch (e) { if (!e.conflict) throw e; meta = JSON.parse((await GH.get(KEY_PATH)).text); raw = null; }   // another device created it first
+  }
+  raw ||= await deriveRaw(pass, meta.salt, meta.iter);
+  const key = await importRawKey(raw);
+  try { if (await openText(key, meta.check, 'check') !== NOTE_CHECK) throw 0; } catch { throw new Error('Wrong passphrase'); }
+  noteKey = key; LS.set('cpt.nkey', raw); DECFAIL.clear();
+}
+function forgetPassphrase() {
+  noteKey = null; localStorage.removeItem('cpt.nkey');
+  eachSealed(state, (r, f, k) => { if (r[f + 'Enc']) delete NOTES[k]; });   // keep only notes that aren't safely encrypted yet
+  LS.set('cpt.notes', NOTES);
+}
 
 // ---------------------------------------------------------------- derivation
 function scoreOf(a, it) {
@@ -88,7 +177,7 @@ function topicOf(it) {
 function derive() {
   const today = isoLocal();
   const att = [];
-  for (const [id, s] of Object.entries(state.items)) for (const a of s.attempts || []) att.push({...a, id});
+  for (const [id, s] of Object.entries(state.items)) for (const a of s.attempts || []) att.push({...a, aid: a.id, id});
   att.sort((x, y) => x.end - y.end);
   let R = +cfg.initRating || 1100, n = 0, xp = 0, gold = 0;
   const ratingHist = [], perDay = {}, perItem = {}, dRmap = {};
@@ -99,7 +188,7 @@ function derive() {
     if (it.r > 0 && !SPECIAL.has(it.k)) {
       const E = 1 / (1 + Math.pow(10, (it.r - R) / 400));
       const K = n < 50 ? 40 : 24;
-      a.dR = K * (sc - E); dRmap[a.id] = a.dR; R += a.dR; n++;
+      a.dR = K * (sc - E); dRmap[a.aid] = a.dR; R += a.dR; n++;
       ratingHist.push({t: a.end, day, R, id: a.id});
     }
     const gain = Math.round(Math.max(8, (it.r || 1000) / 20) * Math.max(sc, 0.15));
@@ -216,6 +305,11 @@ function mergeStates(a, b) {
   const uni = (p = [], q = [], key = 'id') => { const m = new Map(); [...p, ...q].forEach(o => m.set(typeof o === 'string' ? o : o[key], o)); return [...m.values()]; };
   out.redeemed = uni(a.redeemed, b.redeemed); out.grace = uni(a.grace, b.grace).sort(); out.graceLog = uni(a.graceLog, b.graceLog); out.reviews = uni(a.reviews, b.reviews);
   out.updatedAt = Math.max(a.updatedAt || 0, b.updatedAt || 0);
+  // Never drop ciphertext: a record that survived the merge without its *Enc (e.g. the copy from a device that can't
+  // read it, or from an older build) gets it back from either input, newest blob first.
+  const encIdx = new Map();
+  for (const src of [a, b]) eachSealed(src, (r, f, k) => { const e = r[f + 'Enc'], o = encIdx.get(k); if (e && (!o || (e.at || 0) > (o.at || 0))) encIdx.set(k, e); });
+  eachSealed(out, (r, f, k) => { const e = encIdx.get(k); if (e && !r[f + 'Enc']) r[f + 'Enc'] = e; });
   return out;
 }
 let shaState = LS.get('cpt.sha', null), syncTimer = null, syncing = false;
@@ -229,6 +323,8 @@ async function syncNow(force = false) {
       const remote = await GH.get('data/state.json');
       let merged = state;
       if (remote) { merged = mergeStates(state, JSON.parse(remote.text)); }
+      stripPlain(merged); await encryptPending(merged);
+      if (hasPlain(merged)) throw new Error('refusing to upload plaintext notes');
       const text = JSON.stringify(merged);
       const changed = !remote || remote.text !== text;
       state = merged; LS.set('cpt.state', state);
@@ -244,6 +340,7 @@ async function syncNow(force = false) {
       break;
     }
     LS.set('cpt.lastSync', Date.now());
+    await decryptAll(state);
     setSync('ok', 'Synced ' + new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}));
     render();
   } catch (e) { setSync('err', e.message); }
@@ -367,10 +464,12 @@ function shortStatus() {
 - Most common mistakes: ${topM}.
 - Language: C++. I want to learn the pattern, so guide me with hints, not full solutions.`;
 }
+const attNote = a => noteOf('a', {...a, id: a.aid ?? a.id}, 'notes');   // works for raw attempts and D.att rows
+const shown = v => v == null ? LOCKED : v;
 function itemHistory(id) {
   const s = state.items[id]; if (!s) return 'No previous attempts.';
-  const lines = (s.attempts || []).map(a => `- ${new Date(a.end).toLocaleDateString('en-GB')}: ${OUTCOMES[a.outcome]?.label}, ${Math.round(a.sec / 60)} min, hints used: ${a.hints?.length ? a.hints.join('+') : 'none'}${a.editorial ? ', read editorial' : ''}, WA: ${a.wa || 0}, mistake: ${a.mistake || 'n/a'}. My notes: ${a.notes || '(none)'}`);
-  const an = (s.analyses || []).map(x => `- Analysis from ${x.source} on ${new Date(x.at).toLocaleDateString('en-GB')}:\n${x.text.trim().split('\n').map(l => '    ' + l).join('\n')}`);
+  const lines = (s.attempts || []).map(a => `- ${new Date(a.end).toLocaleDateString('en-GB')}: ${OUTCOMES[a.outcome]?.label}, ${Math.round(a.sec / 60)} min, hints used: ${a.hints?.length ? a.hints.join('+') : 'none'}${a.editorial ? ', read editorial' : ''}, WA: ${a.wa || 0}, mistake: ${a.mistake || 'n/a'}. My notes: ${shown(attNote(a)) || '(none)'}`);
+  const an = (s.analyses || []).map(x => `- Analysis from ${x.source} on ${new Date(x.at).toLocaleDateString('en-GB')}:\n${shown(noteOf('n', x, 'text')).trim().split('\n').map(l => '    ' + l).join('\n')}`);
   return [...lines, ...an].join('\n') || 'No previous attempts.';
 }
 function aiPack(id) {
@@ -411,10 +510,10 @@ confidence: <1-5, how well I now understand it>
 }
 function weeklyPack() {
   const since = Date.now() - 7 * 864e5;
-  const rows = D.att.filter(a => a.end >= since).map(a => { const it = ITEMS.get(a.id) || {}; return `- ${new Date(a.end).toLocaleDateString('en-GB')} | ${it.n} (${it.p}, ${it.r}) | ${Math.round(a.sec / 60)}/${it.m} min | ${OUTCOMES[a.outcome]?.label}${a.hints?.length ? ' hints:' + a.hints.join('+') : ''} | mistake: ${a.mistake || '-'} | notes: ${(a.notes || '').replace(/\n/g, ' ').slice(0, 220)}`; });
+  const rows = D.att.filter(a => a.end >= since).map(a => { const it = ITEMS.get(a.id) || {}; return `- ${new Date(a.end).toLocaleDateString('en-GB')} | ${it.n} (${it.p}, ${it.r}) | ${Math.round(a.sec / 60)}/${it.m} min | ${OUTCOMES[a.outcome]?.label}${a.hints?.length ? ' hints:' + a.hints.join('+') : ''} | mistake: ${a.mistake || '-'} | notes: ${shown(attNote(a)).replace(/\n/g, ' ').slice(0, 220)}`; });
   return `You are my competitive-programming coach doing my weekly review. My goal: Codeforces Expert (1600). Below is my status file and every attempt from the last 7 days.
 
-${statusMd()}
+${statusMd(true)}
 
 ## Attempts in the last 7 days
 ${rows.join('\n') || '(none)'}
@@ -436,9 +535,11 @@ function parseBlock(text, kind) {
 }
 
 // ---------------------------------------------------------------- STATUS.md
-function statusMd() {
+// priv=false is the public data/STATUS.md: no free text at all. priv=true (Copy buttons, weekly pack, export) adds your
+// decrypted notes, analyses and reviews and never leaves this device unless you paste it somewhere.
+function statusMd(priv = false) {
   const d = D; const lines = [];
-  lines.push(`# CP status — Harshith (C++)`, `_Updated ${new Date().toLocaleString('en-GB')}. Generated by the Road to 2000 tracker from my attempt log. Any AI coaching me should read this first._`, '');
+  lines.push(`# CP status — Harshith (C++)`, `_Updated ${new Date().toLocaleString('en-GB')}. Generated by the Road to 2000 tracker from my attempt log. Any AI coaching me should read this first._`, ...(priv ? [] : ['', '_My notes, AI analyses and reviews are encrypted in `state.json` and left out of this public file._']), '');
   lines.push('## Snapshot',
     `- Practice rating: **${Math.round(d.R)}** (${d.n} rated attempts; Elo-style vs estimated CF problem ratings). Goal: Codeforces Expert 1600.`,
     `- Projection: ${d.proj?.done ? 'already at 1600 practice level' : d.proj?.date ? `reaches 1600 around ${fmtShort(d.proj.date)} at the current trend (+${d.proj.slope.toFixed(1)}/day)` : 'not enough recent data / trend flat'}`,
@@ -452,14 +553,16 @@ function statusMd() {
   lines.push('## Recurring mistakes', ...(Object.entries(mist).sort((a, b) => b[1] - a[1]).map(([m, c]) => `- ${m}: ${c}`)), Object.keys(mist).length ? '' : '- none logged yet', '');
   lines.push('## Revisit queue', ...(d.revisit.slice(0, 15).map(r => `- ${ITEMS.get(r.id)?.n || r.id} — due ${fmtShort(r.due)}`)), d.revisit.length ? '' : '- empty', '');
   lines.push('## Recent attempts (newest first)');
-  d.att.slice(-25).reverse().forEach(a => { const it = ITEMS.get(a.id) || {}; lines.push(`- ${new Date(a.end).toLocaleDateString('en-GB')} · ${it.n} (${it.p} ${it.r}) · ${Math.round(a.sec / 60)}/${it.m} min · ${OUTCOMES[a.outcome]?.label}${a.hints?.length ? ' (hints ' + a.hints.join('+') + ')' : ''}${a.mistake && a.mistake !== 'none' ? ' · ' + a.mistake : ''}${a.notes ? ' — ' + a.notes.replace(/\n+/g, ' ').slice(0, 200) : ''}`); });
+  d.att.slice(-25).reverse().forEach(a => { const it = ITEMS.get(a.id) || {}; lines.push(`- ${new Date(a.end).toLocaleDateString('en-GB')} · ${it.n} (${it.p} ${it.r}) · ${Math.round(a.sec / 60)}/${it.m} min · ${OUTCOMES[a.outcome]?.label}${a.hints?.length ? ' (hints ' + a.hints.join('+') + ')' : ''}${a.mistake && a.mistake !== 'none' ? ' · ' + a.mistake : ''}${priv && attNote(a) !== '' ? ' — ' + shown(attNote(a)).replace(/\n+/g, ' ').slice(0, 200) : ''}`); });
   if (!d.att.length) lines.push('- none yet');
   lines.push('', '## AI analyses (newest first)');
-  const an = []; for (const [id, s] of Object.entries(state.items)) for (const x of s.analyses || []) an.push({...x, id});
-  an.sort((a, b) => b.at - a.at).slice(0, 20).forEach(x => lines.push(`### ${ITEMS.get(x.id)?.n || x.id} — ${x.source}, ${new Date(x.at).toLocaleDateString('en-GB')}`, x.text.trim(), ''));
+  const an = []; for (const [pid, s] of Object.entries(state.items)) for (const x of s.analyses || []) an.push({x, pid});
+  if (priv) an.sort((a, b) => b.x.at - a.x.at).slice(0, 20).forEach(({x, pid}) => lines.push(`### ${ITEMS.get(pid)?.n || pid} — ${x.source}, ${new Date(x.at).toLocaleDateString('en-GB')}`, shown(noteOf('n', x, 'text')).trim(), ''));
+  else if (an.length) lines.push(`- ${an.length} logged (text encrypted).`, '');
   if (!an.length) lines.push('- none yet', '');
   lines.push('## Weekly reviews (newest first)');
-  [...state.reviews].sort((a, b) => b.at - a.at).slice(0, 4).forEach(r => lines.push(`### ${r.source}, ${new Date(r.at).toLocaleDateString('en-GB')}`, r.text.trim(), ''));
+  if (priv) [...state.reviews].sort((a, b) => b.at - a.at).slice(0, 4).forEach(r => lines.push(`### ${r.source}, ${new Date(r.at).toLocaleDateString('en-GB')}`, shown(noteOf('r', r, 'text')).trim(), ''));
+  else if (state.reviews.length) lines.push(`- ${state.reviews.length} logged (text encrypted).`, '');
   if (!state.reviews.length) lines.push('- none yet', '');
   lines.push('## How to coach me', '- Give the smallest next hint; never a full solution unless I ask.', '- At the end of a problem, output an ANALYSIS block (problem, understanding, stuck_on, key_idea, mistake_type, practice_next, confidence) so I can log it.');
   return lines.join('\n');
@@ -675,7 +778,7 @@ function renderStats() {
       <li>At 0 HP you faint and lose half your gold (fainted ${d.faints}×).</li><li>Exam days and grace days never cost HP or streak. Best streak: ${d.best} days.</li></ul></div>
   </section>
   <section class="panel"><div class="row" style="justify-content:space-between"><h3>Rewards shop</h3><span class="mini num" style="color:var(--r-master)">◆ ${d.gold} gold</span></div>
-    <ol class="quests" style="margin-top:10px">${state.rewards.map(r => `<li class="q" style="grid-template-columns:minmax(0,1fr) auto"><div class="nm"><span class="t">${esc(r.name)}</span><div class="sub"><span class="num" style="color:var(--r-master)">◆ ${r.cost}</span></div></div><div class="acts"><button class="btn sm pri" data-act="redeem" data-id="${r.id}" ${d.gold < r.cost ? 'disabled' : ''}>Redeem</button><button class="btn sm ghost" data-act="delreward" data-id="${r.id}">Remove</button></div></li>`).join('')}</ol>
+    <ol class="quests" style="margin-top:10px">${state.rewards.map(r => `<li class="q" style="grid-template-columns:minmax(0,1fr) auto"><div class="nm"><span class="t">${esc(shown(noteOf('w', r, 'name')) || 'Reward')}</span><div class="sub"><span class="num" style="color:var(--r-master)">◆ ${r.cost}</span></div></div><div class="acts"><button class="btn sm pri" data-act="redeem" data-id="${r.id}" ${d.gold < r.cost ? 'disabled' : ''}>Redeem</button><button class="btn sm ghost" data-act="delreward" data-id="${r.id}">Remove</button></div></li>`).join('')}</ol>
     <div class="row" style="margin-top:10px"><input type="text" id="rwName" placeholder="Reward, e.g. a movie night" style="flex:2;min-width:140px;width:auto"><input type="number" id="rwCost" placeholder="Cost" min="1" style="flex:1;min-width:80px;width:auto"><button class="btn" data-act="addreward">Add</button></div></section>
   <section class="panel"><h3>Topics</h3><div class="scroll" style="margin-top:8px"><table class="t num"><thead><tr><th>Topic</th><th>Att.</th><th>Clean</th><th>Hint</th><th>Edit.</th><th>Unsolved</th><th>Time vs est.</th><th>Avg rating</th></tr></thead><tbody>
     ${topics.map(([k, T]) => `<tr><td>${esc(k)}</td><td>${T.n}</td><td style="color:var(--good)">${T.clean}</td><td>${T.hint}</td><td style="color:var(--warn)">${T.ed}</td><td>${T.fail}</td><td>${(T.ratio / T.n).toFixed(2)}×</td><td style="color:${rcol(Math.round(T.rsum / T.n))}">${Math.round(T.rsum / T.n)}</td></tr>`).join('') || '<tr><td colspan="8" class="muted">No logged attempts yet.</td></tr>'}
@@ -683,8 +786,8 @@ function renderStats() {
 }
 function renderStatus() {
   return `<section class="panel"><div class="row" style="justify-content:space-between"><h3>STATUS.md</h3><div class="row"><button class="btn sm" data-act="copystatus">Copy</button><button class="btn sm" data-act="weekly">Copy weekly review pack</button><button class="btn sm" data-act="pastereview">Paste review</button></div></div>
-    <p class="muted" style="font-size:13px;margin:8px 0 10px">Saved to <span class="mono">data/STATUS.md</span> in your cp-tracker repo on every sync. Give it, or the weekly pack, to any AI so it starts with full context. Paste the AI's REVIEW or ANALYSIS block back in here.</p>
-    <pre class="md">${esc(statusMd())}</pre></section>`;
+    <p class="muted" style="font-size:13px;margin:8px 0 10px">A version without your notes is saved to <span class="mono">data/STATUS.md</span> in your public repo on every sync. This preview and the Copy buttons include your notes, so give those to the AI. Paste the AI's REVIEW or ANALYSIS block back in here.</p>
+    <pre class="md">${esc(statusMd(true))}</pre></section>`;
 }
 function renderSettings() {
   const last = LS.get('cpt.lastSync', 0);
@@ -697,6 +800,7 @@ function renderSettings() {
       <label class="f">Token<input type="password" id="s_token" value="${esc(cfg.token)}" autocomplete="off" placeholder="github_pat_…"></label>
     </div>
     <div class="row" style="margin-top:12px"><button class="btn pri" data-act="savecfg">Save &amp; sync</button><span class="muted" style="font-size:12.5px">${last ? 'Last synced ' + new Date(last).toLocaleString('en-GB') : 'Not synced yet'} ${syncState.status === 'err' ? '· <span style="color:var(--bad)">' + esc(syncState.msg) + '</span>' : ''}</span></div></section>
+  ${notesPanel()}
   <section class="panel"><h3>Practice</h3><div class="grid2" style="margin-top:10px">
       <label class="f">Codeforces handle<input type="text" id="s_cf" value="${esc(cfg.cf)}"></label>
       <label class="f">AtCoder handle<input type="text" id="s_ac" value="${esc(cfg.ac)}"></label>
@@ -708,6 +812,17 @@ function renderSettings() {
     <div class="row" style="margin-top:12px"><button class="btn" data-act="savecfg">Save</button></div></section>
   <section class="panel"><h3>Backup</h3><p class="muted" style="font-size:13.5px;margin:6px 0 12px">Export the full log as JSON for any AI or for safekeeping, or import one to merge it in.</p>
     <div class="row"><button class="btn" data-act="export">Export JSON</button><label class="btn">Import JSON<input type="file" id="importFile" accept="application/json" hidden></label><button class="btn ghost danger" data-act="resetlocal">Clear this device's copy</button></div></section>`;
+}
+function notesPanel() {
+  const ns = noteStats();
+  const line = noteKey ? `Unlocked on this device.${ns.pending ? ` ${ns.pending} note${ns.pending > 1 ? 's' : ''} will be encrypted on the next sync.` : ''}`
+    : ns.sealed ? `Locked: ${ns.locked} encrypted note${ns.locked === 1 ? '' : 's'} can't be read here until you enter the passphrase. They stay safe in the repo meanwhile.`
+    : `Not set up. ${ns.pending ? `${ns.pending} note${ns.pending > 1 ? 's' : ''} on this device stay${ns.pending > 1 ? '' : 's'} here and aren't uploaded until you set a passphrase.` : ''}`;
+  return `<section class="panel"><h3>Private notes</h3>
+    <p class="muted" style="font-size:13.5px;margin:6px 0 12px">The repo is public. Your notes, AI analyses, reviews and reward names are encrypted in this browser before they're uploaded (AES-GCM, key derived from your passphrase). Use the same passphrase on every device. It is never uploaded, and there is no way to recover the notes without it.</p>
+    <div class="row"><span class="dot ${noteKey ? 'ok' : ns.locked ? 'err' : ''}"></span><span style="font-size:13.5px">${esc(line)}</span></div>
+    ${noteKey ? `<div class="row" style="margin-top:12px"><button class="btn ghost" data-act="forgetpass">Forget passphrase on this device</button></div>`
+      : `<div class="row" style="margin-top:12px"><input type="password" id="s_pass" autocomplete="new-password" placeholder="Notes passphrase" style="flex:1;min-width:180px;width:auto"><button class="btn pri" data-act="setpass">Unlock notes</button></div>`}</section>`;
 }
 function renderOnboarding() {
   return `<section class="onb"><div class="rank" style="grid-template-columns:1fr"><div style="position:relative;z-index:1"><div class="title">Road to 2000</div>
@@ -840,8 +955,8 @@ function confirmDlg(title, body, act, label, danger = false) {
 }
 function detailDlg(id) {
   const it = ITEMS.get(id), s = state.items[id];
-  const hist = (s?.attempts || []).slice().reverse().map(a => `<li style="padding:6px 0;border-top:1px solid var(--line)"><b>${OUTCOMES[a.outcome]?.label}</b> <span class="muted num">· ${new Date(a.end).toLocaleString('en-GB')} · ${Math.round(a.sec / 60)} min · hints ${a.hints?.join('+') || 'none'} · WA ${a.wa || 0}${a.mistake && a.mistake !== 'none' ? ' · ' + esc(a.mistake) : ''}${D.dRmap[a.id] != null ? ` · rating ${D.dRmap[a.id] >= 0 ? '+' : ''}${D.dRmap[a.id].toFixed(1)}` : ''}</span>${a.notes ? `<div style="white-space:pre-wrap;font-size:13.5px">${esc(a.notes)}</div>` : ''}</li>`).join('');
-  const an = (s?.analyses || []).slice().reverse().map(x => `<li style="padding:6px 0;border-top:1px solid var(--line)"><b>${esc(x.source)}</b> <span class="muted">· ${new Date(x.at).toLocaleString('en-GB')}</span><pre class="md" style="margin-top:4px">${esc(x.text)}</pre></li>`).join('');
+  const hist = (s?.attempts || []).slice().reverse().map(a => `<li style="padding:6px 0;border-top:1px solid var(--line)"><b>${OUTCOMES[a.outcome]?.label}</b> <span class="muted num">· ${new Date(a.end).toLocaleString('en-GB')} · ${Math.round(a.sec / 60)} min · hints ${a.hints?.join('+') || 'none'} · WA ${a.wa || 0}${a.mistake && a.mistake !== 'none' ? ' · ' + esc(a.mistake) : ''}${D.dRmap[a.id] != null ? ` · rating ${D.dRmap[a.id] >= 0 ? '+' : ''}${D.dRmap[a.id].toFixed(1)}` : ''}</span>${attNote(a) !== '' ? `<div style="white-space:pre-wrap;font-size:13.5px">${esc(shown(attNote(a)))}</div>` : ''}</li>`).join('');
+  const an = (s?.analyses || []).slice().reverse().map(x => `<li style="padding:6px 0;border-top:1px solid var(--line)"><b>${esc(x.source)}</b> <span class="muted">· ${new Date(x.at).toLocaleString('en-GB')}</span><pre class="md" style="margin-top:4px">${esc(shown(noteOf('n', x, 'text')))}</pre></li>`).join('');
   openDlg(`<header><h3>${it.u ? `<a href="${esc(it.u)}" target="_blank" rel="noopener">${esc(it.n)}</a>` : esc(it.n)}</h3><button class="btn sm" data-act="close">Close</button></header>
     <div class="muted" style="font-size:13.5px">${esc(it.p)} · est. rating ${it.r || '—'} · est. ${it.m} min · ${esc(it.l?.join(' · ') || '')}${it.t?.length ? ' · ' + esc(it.t.join(', ')) : ''}${it.sb ? ' · ' + esc(it.sb) : ''}</div>
     <div class="row"><button class="btn pri" data-act="start" data-id="${esc(id)}">Start timer</button><button class="btn" data-act="logtime" data-id="${esc(id)}">Solved in… (enter time)</button><button class="btn" data-act="copyai" data-id="${esc(id)}">Copy for AI</button><button class="btn" data-act="paste" data-id="${esc(id)}">Paste analysis</button>
@@ -909,7 +1024,7 @@ document.addEventListener('click', async e => {
       touch(); closeDlg(); render(); toast('Analysis saved — it goes into STATUS.md on the next sync'); break;
     }
     case 'weekly': await copyText(weeklyPack()); break;
-    case 'copystatus': await copyText(statusMd()); break;
+    case 'copystatus': await copyText(statusMd(true)); break;
     case 'pastereview': pasteDlg(null, 'REVIEW'); break;
     case 'savereview': { const text = $('#p_text').value.trim(); if (!text) break; const {body} = parseBlock(text, 'REVIEW'); state.reviews.push({id: uid(), at: Date.now(), source: $('#p_src').value, text: body}); touch(); closeDlg(); render(); toast('Review saved'); break; }
     case 'grace': if (graceDays().length >= SHEET.meta.grace_days) { toast('No grace days left'); break; } (state.graceLog ||= []).push({id: uid(), date: D.today, on: true, at: Date.now()}); touch(); render(); toast('Grace day taken — streak and HP are safe today'); break;
@@ -917,7 +1032,7 @@ document.addEventListener('click', async e => {
     case 'autosync': autosync(true); break;
     case 'manualsolve': state.synced[id] = {day: D.today, src: 'manual', at: Date.now()}; touch(); closeDlg(); render(); toast('Marked solved'); break;
     case 'unmanual': state.synced[id] = {...state.synced[id], off: true, at: Date.now()}; touch(); closeDlg(); render(); toast('Unmarked'); break;
-    case 'redeem': { const r = state.rewards.find(x => x.id === id); if (r && D.gold >= r.cost) { state.redeemed.push({id: uid(), rid: r.id, name: r.name, cost: r.cost, at: Date.now()}); touch(); render(); toast(`Enjoy: ${r.name}`); } break; }
+    case 'redeem': { const r = state.rewards.find(x => x.id === id); if (r && D.gold >= r.cost) { const nm = noteOf('w', r, 'name') || ''; state.redeemed.push({id: uid(), rid: r.id, name: nm, cost: r.cost, at: Date.now()}); touch(); render(); toast(nm ? `Enjoy: ${nm}` : 'Enjoy'); } break; }
     case 'delreward': state.rewards = state.rewards.filter(x => x.id !== id); touch(); render(); break;
     case 'addreward': { const n = $('#rwName').value.trim(), c = +$('#rwCost').value; if (!n || !(c > 0)) { toast('Give the reward a name and a cost'); break; } state.rewards.push({id: uid(), name: n, cost: Math.round(c)}); touch(); render(); break; }
     case 'savecfg': {
@@ -927,8 +1042,16 @@ document.addEventListener('click', async e => {
       LS.set('cpt.cfg', cfg); toast('Saved');
       if (cfg.token) { const sh = await loadSheet(); if (sh) { const first = !SHEET; initSheet(sh); if (first) tab = 'today'; } render(); if (SHEET) { syncNow(true); autosync(true); } } else render(); break;
     }
+    case 'setpass': {
+      const pass = $('#s_pass')?.value || ''; b.disabled = true; b.textContent = 'Checking…';
+      try { await setPassphrase(pass); await decryptAll(state); touch(); render(); toast('Notes unlocked'); syncNow(true); }
+      catch (err) { toast(err.message); b.disabled = false; b.textContent = 'Unlock notes'; }
+      break;
+    }
+    case 'forgetpass': forgetPassphrase(); render(); toast('Passphrase forgotten on this device'); break;
     case 'export': {
-      const blob = new Blob([JSON.stringify({exportedAt: new Date().toISOString(), state, status: statusMd()}, null, 1)], {type: 'application/json'});
+      const plain = JSON.parse(JSON.stringify(state)); eachSealed(plain, (r, f, k) => { if (NOTES[k] != null) r[f] = NOTES[k]; });   // local file: notes included
+      const blob = new Blob([JSON.stringify({exportedAt: new Date().toISOString(), state: plain, status: statusMd(true)}, null, 1)], {type: 'application/json'});
       const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `cp-tracker-${D.today}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); break;
     }
     case 'resetlocal': if (b.dataset.confirm) { localStorage.removeItem('cpt.state'); state = DEFAULT_STATE(); render(); toast('Local copy cleared; sync will restore it from GitHub'); syncNow(); } else { b.dataset.confirm = '1'; b.textContent = 'Tap again to clear'; } break;
@@ -958,6 +1081,8 @@ async function loadSheet() {
   return null;
 }
 async function boot() {
+  stripPlain(state); LS.set('cpt.state', state);   // older local copies may still hold plaintext notes
+  try { const nk = LS.get('cpt.nkey', null); if (nk) { noteKey = await importRawKey(nk); await decryptAll(state); } } catch { noteKey = null; }
   const sh = await loadSheet();
   if (sh) initSheet(sh);
   if (!SHEET) tab = 'settings';
