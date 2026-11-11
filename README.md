@@ -57,3 +57,15 @@ Score: solved alone within the estimate 1.0 (slower 0.85 / 0.75), after hint 1 0
 
 ## Regenerating the sheet
 `sheet.json` is produced by the builder scripts (see sheet-builder.zip). Keep item IDs stable so existing logs still match.
+
+## Next-up recommendations
+The Progress tab suggests what to solve next from the sheet with a per-topic skill model. Six modes: Auto, Weakness,
+Push, Refresh, Upsolve, Explore. Each pick comes with the reason it was chosen. Tags the sheet hides on mixed and
+ladder problems stay hidden in the reasons too.
+
+## Credits
+- **[CPOS](https://github.com/Soham109/cpos)** by Soham Aggarwal (MIT). The skill model and recommendation modes in
+  `third_party/cpos/practice.js` are a JavaScript port adapted from CPOS's practice engine
+  (`src/engine/practice.rs`, `src/engine/target.rs`). Licence: `third_party/cpos/LICENSE`.
+- The look (warm trading-floor palette, Fraunces + IBM Plex type, hairline stat grid, market tape) is adapted from my
+  [Algorithmic Collusion Detector](https://github.com/Harshith-Akella-1/Algorithmic-Collusion-Detector-Penalizer-) UI.

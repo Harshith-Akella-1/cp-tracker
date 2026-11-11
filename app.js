@@ -632,7 +632,7 @@ function rankCard() {
   </section>`;
 }
 
-function itemRow(it, {actions = true} = {}) {
+function itemRow(it, {actions = true, why = ''} = {}) {
   const st = D.status[it.id], done = D.isDone(it.id), special = SPECIAL.has(it.k), live = timer?.id === it.id;
   const hideTags = (it.k === 'mixed' || it.k === 'ladder') && !(state.items[it.id]?.attempts?.length || done);
   const sub = [`<span class="pf">${esc(it.p)}</span>`];
@@ -645,6 +645,7 @@ function itemRow(it, {actions = true} = {}) {
   if ((special || it.k === 'retest') && it.no) sub.push(`<span>${esc(it.no)}</span>`);
   if (it.p === 'GFG') sub.push('<span>search the name on GFG</span>');
   const an = state.items[it.id]?.analyses?.length; if (an) sub.push(`<span>${an} AI note${an > 1 ? 's' : ''}</span>`);
+  if (why) sub.push(`<span class="why">${esc(why)}</span>`);
   const title = it.u ? `<a class="t" href="${esc(it.u)}" target="_blank" rel="noopener">${esc(it.n)} ${ICON.ext}</a>` : `<span class="t">${esc(it.n)}</span>`;
   const rate = special ? `<span class="rate" style="--c:var(--r-cm)">${it.k === 'mock' || it.k === 'contest' ? 'RND' : it.k === 'edu' ? 'EDU' : it.k === 'lecture' ? 'VID' : 'NTS'}<small>${it.m}m</small></span>`
                        : `<span class="rate num" style="--c:${rcol(it.r)}">${it.r || '—'}<small>${it.m}m</small></span>`;
@@ -774,6 +775,47 @@ function ratingChart() {
   s += `<circle cx="${x(h.length - 1)}" cy="${y(h[h.length - 1].R)}" r="5" fill="var(--rank)" style="filter:drop-shadow(0 0 6px var(--rank))"/></svg>`;
   return s;
 }
+// ---------------------------------------------------------------- next-up recommender (port of CPOS's practice engine)
+let recMode = LS.get('cpt.recmode', 'auto');
+function practiceHistory() {
+  const h = new Map(), tagsOf = it => (it.t || []).map(t => t.toLowerCase());
+  for (const [id, s] of Object.entries(state.items)) {
+    const it = ITEMS.get(id), atts = (s.attempts || []).slice().sort((a, b) => a.end - b.end);
+    if (!it || !it.r || SPECIAL.has(it.k) || !atts.length) continue;
+    let firstAc = null, before = 0;
+    for (const a of atts) {   // hints and the editorial count like extra wrong attempts before the accept
+      if (firstAc != null) break;
+      if (a.outcome === 'gaveup') { before += 1 + (a.wa || 0); continue; }
+      firstAc = a.end; before += (a.wa || 0) + (a.hints?.length || 0) + (a.outcome === 'editorial' || a.editorial ? 3 : 0);
+    }
+    h.set(id, {rating: it.r, tags: tagsOf(it), firstAc, attemptsBeforeAc: before, totalAttempts: atts.length, lastTouch: atts[atts.length - 1].end});
+  }
+  for (const [id, sy] of Object.entries(state.synced)) {   // solves synced from CF/AtCoder/LeetCode/GFG count as clean accepts
+    const it = ITEMS.get(id); if (sy.off || h.has(id) || !it?.r || SPECIAL.has(it.k)) continue;
+    const t = new Date(sy.day + 'T12:00:00').getTime();
+    h.set(id, {rating: it.r, tags: tagsOf(it), firstAc: t, attemptsBeforeAc: 0, totalAttempts: 1, lastTouch: t});
+  }
+  return h;
+}
+function nextUpReport() {
+  if (!window.CPOSPractice) return null;
+  const problems = ORDER.map(id => ITEMS.get(id)).filter(it => it.r > 0 && !SPECIAL.has(it.k) && it.k !== 'retest').map(it => ({
+    id: it.id, rating: it.r, tags: (it.t || []).map(t => t.toLowerCase()),
+    hidden: (it.k === 'mixed' || it.k === 'ladder') && !state.items[it.id]?.attempts?.length && !D.isDone(it.id),
+    solved: D.isDone(it.id) || D.status[it.id] === 'skipped'}));
+  return CPOSPractice.recommend(problems, practiceHistory(), {mode: recMode, count: 6, level: D.R, goal: 1600});
+}
+function nextUpPanel() {
+  const rep = nextUpReport(); if (!rep) return '';
+  const modes = Object.entries(CPOSPractice.MODES).map(([k, m]) => `<button class="btn sm ${k === rep.mode ? 'on' : 'ghost'}" data-act="recmode" data-m="${k}" aria-pressed="${k === rep.mode}">${m.label}</button>`).join('');
+  const weak = rep.weak.map(s => `<span class="tag">${esc(s.tag)} ≈${s.skill}</span>`).join(' ');
+  return `<section class="panel"><h3 class="rule">Next up</h3>
+    <div class="row" style="margin-top:10px">${modes}</div>
+    <p class="muted" style="font-size:13px;margin:8px 0 10px">${esc(rep.note)}. Level ≈${rep.level}, goal ${rep.goal}.</p>
+    ${rep.recs.length ? `<ol class="quests">${rep.recs.map(r => itemRow(ITEMS.get(r.id), {why: r.reasons.join(' · ')})).join('')}</ol>` : '<div class="empty" style="padding:18px">Nothing fits this mode yet. Log a few more attempts, or try another mode.</div>'}
+    ${weak ? `<div class="row" style="margin-top:12px;font-size:12.5px"><span class="muted">Weakest topics:</span> ${weak}</div>` : ''}
+    <p class="muted" style="font-size:11.5px;margin:10px 0 0">Skill model adapted from <a href="https://github.com/Soham109/cpos" target="_blank" rel="noopener">CPOS</a> by Soham Aggarwal (MIT).</p></section>`;
+}
 function renderStats() {
   const d = D;
   const weeks = 12, cells = [];
@@ -781,7 +823,7 @@ function renderStats() {
   const startCell = addDays(monday, -7 * (weeks - 1));
   for (let i = 0; i < weeks * 7; i++) { const day = addDays(startCell, i); const n = d.perDay[day]?.solved || 0; const a = n ? Math.min(1, 0.3 + n / (d.target * 1.3)) : 0; cells.push(`<i title="${day}: ${n}" style="${n ? `background:var(--good);opacity:${a.toFixed(2)}` : day > d.today ? 'opacity:.3' : ''}"></i>`); }
   const topics = Object.entries(d.topics).sort((a, b) => b[1].n - a[1].n);
-  return `${rankCard()}
+  return `${rankCard()}${nextUpPanel()}
   <section class="panel"><div class="row" style="justify-content:space-between"><h3>Practice rating</h3><span class="muted" style="font-size:13px">${d.proj?.date ? `trend +${d.proj.slope.toFixed(1)}/day → 1600 around <b>${fmtShort(d.proj.date)}</b>` : ''}</span></div>
     <div style="margin-top:10px">${ratingChart()}</div>
     <p class="muted" style="font-size:12px;margin:8px 0 0">Each attempt moves the rating by K × (score − expected). Score: solved alone within the estimate 1.0, slower 0.85 or 0.75, after hint 1 0.6, after hint 2 0.4, editorial 0.1, unsolved 0. K is 40 for the first 50 attempts, then 24.</p></section>
@@ -1044,6 +1086,7 @@ document.addEventListener('click', async e => {
     case 'grace': if (graceDays().length >= SHEET.meta.grace_days) { toast('No grace days left'); break; } (state.graceLog ||= []).push({id: uid(), date: D.today, on: true, at: Date.now()}); touch(); render(); toast('Grace day taken — streak and HP are safe today'); break;
     case 'ungrace': (state.graceLog ||= []).push({id: uid(), date: b.dataset.date || D.today, on: false, at: Date.now()}); touch(); render(); toast('Grace day undone'); break;
     case 'autosync': autosync(true); break;
+    case 'recmode': recMode = b.dataset.m; LS.set('cpt.recmode', recMode); render(); break;
     case 'manualsolve': state.synced[id] = {day: D.today, src: 'manual', at: Date.now()}; touch(); closeDlg(); render(); toast('Marked solved'); break;
     case 'unmanual': state.synced[id] = {...state.synced[id], off: true, at: Date.now()}; touch(); closeDlg(); render(); toast('Unmarked'); break;
     case 'redeem': { const r = state.rewards.find(x => x.id === id); if (r && D.gold >= r.cost) { const nm = noteOf('w', r, 'name') || ''; state.redeemed.push({id: uid(), rid: r.id, name: nm, cost: r.cost, at: Date.now()}); touch(); render(); toast(nm ? `Enjoy: ${nm}` : 'Enjoy'); } break; }
