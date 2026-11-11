@@ -49,11 +49,33 @@ touches encrypted notes it can't read.
 - **Status → Copy weekly review pack** / **Paste review**: same loop for weekly reviews.
 
 ## Timer
-Alerts (sound + vibration + banner) at 10 min (hint 1), 17 min (hint 2), 25 min (editorial).
+Alerts (sound + vibration + banner) at 10 min (hint 1), 17 min (hint 2), 25 min (editorial). The clock runs from a
+Web Worker so it keeps time while the problem tab is in front, and the tab title shows the running time.
+
+**Start**
+- **Desktop Chrome / Edge / Safari:** Start opens a small floating timer (Picture-in-Picture) that stays on top, and
+  the timer panel leads with **Open problem**, which opens the problem in a new tab. It's two clicks because a browser
+  lets one click open *either* a new tab *or* a floating window, not both.
+- **Phones:** Start opens the problem in a new tab right away. On Android Chrome a tab opened from a link joins the
+  same tab group. iOS Safari opens it in the current tab group. When the tracker runs as a home-screen app, the
+  problem opens in an in-app browser sheet instead. There's no floating timer on phones (Android's web
+  Picture-in-Picture shrinks the whole browser), and phones may pause the tracker's clock alerts while it's in the
+  background.
+- Both are switchable in Setup → Practice.
+
+## Rating-up moment
+Setup → Rating-up moment: pick a video once per device (for example the "Welcome to Facebook" scene from
+*The Social Network*, 2010, Columbia Pictures, dir. David Fincher). Each time a logged attempt raises your rating it
+plays with that credit on screen. The file is stored only in the browser's IndexedDB and is never committed, uploaded
+or served from Pages (`.gitignore` also blocks video files). With no clip picked, nothing happens. Play/mute toggles,
+start time and length are in the same panel.
 
 ## Practice rating
 Elo-style: after each logged attempt, `R += K × (score − expected)`, expected = 1 / (1 + 10^((problem − R)/400)).
 Score: solved alone within the estimate 1.0 (slower 0.85 / 0.75), after hint 1 0.6, after hint 2 0.4, editorial 0.1, unsolved 0. K = 40 for the first 50 attempts, then 24.
+
+## Later
+LeetCode auto-save is designed but not built: see [docs/leetcode-autosave.md](docs/leetcode-autosave.md).
 
 ## Regenerating the sheet
 `sheet.json` is produced by the builder scripts (see sheet-builder.zip). Keep item IDs stable so existing logs still match.

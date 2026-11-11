@@ -38,6 +38,19 @@ every upload; `syncNow()` refuses to PUT if any sealed field still holds plainte
 ciphertext a merge would otherwise drop. `statusMd(false)` is the public file; `statusMd(true)` (Copy buttons, weekly
 pack, export) includes decrypted notes and never leaves the device.
 
+### Other moving parts (built in the roadmap pass)
+- **Look:** warm "trading floor" tokens on `:root` in index.html (adapted from the collusion project), Fraunces +
+  IBM Plex Sans/Mono, market tape (`renderTape()`), rank glow on `.rank .big` (keep it).
+- **Next up:** `third_party/cpos/practice.js` (CPOS port, MIT) exposes `CPOSPractice.recommend()`; `nextUpPanel()` in
+  app.js feeds it `practiceHistory()` + sheet items. Hidden sheet tags must stay hidden in reasons.
+- **Timer:** ticks come from a Blob-URL Web Worker (`runTick`). `startFromClick()`: one click can't open both a tab and
+  a PiP window (Chromium consumes user activation for each — verified), so desktop = video PiP first + "Open problem"
+  link; phones = new tab. PiP is a canvas (`pipDraw`) streamed into a hidden `<video class="pipsrc">`.
+- **Rating-up clip:** IndexedDB `cpt-media` / store `blobs` / key `rating-up`; `playClip()` must be called synchronously
+  from the click that saved the attempt (autoplay with sound). cfg: `clipOn`, `clipMuted`, `clipStart`, `clipLen`.
+- **Testing:** headless Chromium via Playwright works for everything except real PiP windows; mock `api.github.com`
+  with a route handler (see git history of the notes work for the pattern).
+
 ## Ground rules
 
 - Static, no-build page. Must keep working from a phone home screen (iOS Safari + Android Chrome). No bundler, no
